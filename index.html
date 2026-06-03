@@ -1759,15 +1759,7 @@ function pageSettings() {
       </div>
       <div id="settings-msg" class="mt-8"></div>
     </div>
-    ${currentUser?.role === 'lead_pastor' ? `
-    <div class="card" style="border:2px solid var(--red);">
-      <div class="card-title" style="color:var(--red);">⚠ Danger Zone — Clear Test Data</div>
-      <div class="alert alert-error">This will permanently delete ALL income records, fund requests, welfare disbursements, savings withdrawals, pledges, campaigns and reset all fund pot balances to zero. Users and settings are kept. This cannot be undone.</div>
-      <div class="btn-group mt-16">
-        <button class="btn btn-danger" onclick="clearAllTestData()">🗑 Clear All Data & Reset Balances</button>
-      </div>
-      <div id="clear-msg" class="mt-8"></div>
-    </div>` : ''}
+    <div id="danger-zone-container"></div>
   `;
 }
 
@@ -1783,6 +1775,19 @@ async function loadSettings() {
     const op = document.getElementById('s-op');
     if(op) op.value = Math.max(0, 100 - parseFloat(this.value||0));
   });
+  // Render danger zone only for lead pastor
+  const dz = document.getElementById('danger-zone-container');
+  if (dz) {
+    dz.innerHTML = currentUser.role === 'lead_pastor' ? `
+      <div class="card" style="border:2px solid var(--red);margin-top:20px;">
+        <div class="card-title" style="color:var(--red);">⚠ Danger Zone — Clear Test Data</div>
+        <div class="alert alert-error">This will permanently delete ALL income records, fund requests, welfare disbursements, savings withdrawals, pledges, campaigns and reset all fund pot balances to zero. Users and settings are kept. This cannot be undone.</div>
+        <div class="btn-group mt-16">
+          <button class="btn btn-danger" onclick="clearAllTestData()">🗑 Clear All Data & Reset Balances</button>
+        </div>
+        <div id="clear-msg" class="mt-8"></div>
+      </div>` : '';
+  }
 }
 
 async function saveSettings() {
