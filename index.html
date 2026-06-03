@@ -718,7 +718,6 @@ async function saveIncome() {
   const opRate = parseFloat(appData.settings.operational_rate||40)/100;
 
   let tithe = 0, savings = 0, operational = 0, womens_amt = 0, welfare_amt = welfare;
-  const combined = general + directTithe;
 
   if (type === 'welfare') {
     welfare_amt = welfare;
