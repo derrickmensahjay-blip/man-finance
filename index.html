@@ -289,7 +289,7 @@ const ROLE_LABELS = {
 
 const NAV_CONFIG = [
   { section: 'Overview', items: [
-    { id: 'dashboard', label: 'Dashboard', icon: '⊞', roles: ['lead_pastor','finance_admin','department_head','womens_ministry_lead'] }
+    { id: 'dashboard', label: 'Dashboard', icon: '⊞', roles: ['lead_pastor','finance_admin','womens_ministry_lead'] }
   ]},
   { section: 'Finance', items: [
     { id: 'income', label: 'Record Income', icon: '↑', roles: ['finance_admin','lead_pastor'] },
@@ -344,7 +344,12 @@ async function initApp() {
   await loadGlobalData();
   buildSidebar();
   buildPages();
-  navigateTo('dashboard');
+  // Dept heads go straight to requests; womens lead gets mini dashboard
+  if (currentUser.role === 'department_head') {
+    navigateTo('requests');
+  } else {
+    navigateTo('dashboard');
+  }
 }
 
 async function loadGlobalData() {
@@ -452,6 +457,11 @@ function pageDashboard() {
 }
 
 async function loadDashboard() {
+  // Women's Ministry Lead sees mini dashboard — their fund only
+  if (currentUser.role === 'womens_ministry_lead') {
+    loadWomensDashboard();
+    return;
+  }
   document.getElementById('dash-date').textContent = new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
   const pots = appData.pots;
   const potDefs = [
@@ -519,6 +529,44 @@ async function loadDashboard() {
   }
 }
 
+async function loadWomensDashboard() {
+  const pot = appData.pots['womens_ministry'];
+  const now = new Date();
+  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
+  const { data: myReqs } = await db.from('fund_requests').select('*').eq('requested_by', currentUser.id).order('created_at',{ascending:false}).limit(5);
+  const { data: monthIncome } = await db.from('income_records').select('womens_ministry_amount').gte('service_date', firstDay);
+  const monthWomens = (monthIncome||[]).reduce((s,r)=>s+parseFloat(r.womens_ministry_amount||0),0);
+
+  const dashEl = document.getElementById('pots-grid');
+  if (dashEl) dashEl.innerHTML = `
+    <div class="pot-card purple" style="grid-column:1/-1;max-width:360px;">
+      <div class="pot-name">♀ Women's Ministry Fund Balance</div>
+      <div class="pot-balance" style="font-size:32px;color:#7b1fa2">${fmt(pot?.balance||0)}</div>
+      <div class="pot-sub">Ring-fenced funds available</div>
+    </div>
+    <div class="pot-card"><div class="pot-name">This Month's Offering</div><div class="pot-balance">${fmt(monthWomens)}</div><div class="pot-sub">Women's offering received</div></div>
+    <div class="pot-card gold"><div class="pot-name">My Requests</div><div class="pot-balance">${(myReqs||[]).length}</div><div class="pot-sub">Total submitted</div></div>
+    <div class="pot-card red"><div class="pot-name">Pending</div><div class="pot-balance">${(myReqs||[]).filter(r=>r.status==='pending').length}</div><div class="pot-sub">Awaiting approval</div></div>
+  `;
+  const summaryEl = document.getElementById('month-summary');
+  if (summaryEl) summaryEl.innerHTML = `<div class="text-muted" style="font-size:13px;">Your Women's Ministry fund balance is shown above. Use <strong>Fund Requests</strong> to request disbursements.</div>`;
+  const pendingEl = document.getElementById('pending-requests-dash');
+  if (pendingEl) {
+    const pending = (myReqs||[]).filter(r=>r.status==='pending');
+    pendingEl.innerHTML = pending.length ? `<div class="table-wrap"><table>
+      <thead><tr><th>Ref</th><th>Amount</th><th>Status</th></tr></thead>
+      <tbody>${pending.map(r=>`<tr><td>${r.request_number}</td><td>${fmt(r.amount_requested)}</td><td><span class="badge badge-pending">Pending</span></td></tr>`).join('')}</tbody>
+    </table></div>` : '<div class="empty-state"><p>No pending requests</p></div>';
+  }
+  const recentEl = document.getElementById('recent-transactions');
+  if (recentEl) recentEl.innerHTML = myReqs&&myReqs.length ? `<div class="table-wrap"><table>
+    <thead><tr><th>Ref</th><th>Purpose</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead>
+    <tbody>${myReqs.map(r=>`<tr><td>${r.request_number}</td><td>${r.purpose}</td><td>${fmt(r.amount_requested)}</td><td><span class="badge badge-${r.status}">${r.status}</span></td><td>${fmtDate(r.created_at)}</td></tr>`).join('')}</tbody>
+  </table></div>` : '<div class="empty-state"><p>No requests submitted yet</p></div>';
+  const dateEl = document.getElementById('dash-date');
+  if (dateEl) dateEl.textContent = new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+}
+
 // =============================================
 // INCOME PAGE
 // =============================================
@@ -548,8 +596,12 @@ function pageIncome() {
           </select>
         </div>
         <div class="form-group" id="inc-general-group">
-          <label>General Offering / Tithe Amount (GH₵)</label>
+          <label>General Offering (GH₵)</label>
           <input type="number" id="inc-general" placeholder="0.00" min="0" step="0.01" oninput="calcIncomeSplit()">
+        </div>
+        <div class="form-group" id="inc-tithe-group">
+          <label>Tithe Received (GH₵)</label>
+          <input type="number" id="inc-tithe-direct" placeholder="0.00" min="0" step="0.01" oninput="calcIncomeSplit()">
         </div>
         <div class="form-group" id="inc-welfare-group">
           <label>Welfare Offering (GH₵)</label>
@@ -585,13 +637,13 @@ function pageIncome() {
 function calcIncomeSplit() {
   const type = document.getElementById('inc-type')?.value;
   const general = parseFloat(document.getElementById('inc-general')?.value||0);
+  const directTithe = parseFloat(document.getElementById('inc-tithe-direct')?.value||0);
   const welfare = parseFloat(document.getElementById('inc-welfare')?.value||0);
   const womens = parseFloat(document.getElementById('inc-womens')?.value||0);
   const titheRate = parseFloat(appData.settings.tithe_rate||10)/100;
   const savingsRate = parseFloat(appData.settings.savings_rate||60)/100;
   const opRate = parseFloat(appData.settings.operational_rate||40)/100;
 
-  // Show/hide womens field
   const wg = document.getElementById('inc-womens-group');
   if (wg) wg.style.display = (type === 'womens_ministry') ? 'flex' : 'none';
 
@@ -602,40 +654,46 @@ function calcIncomeSplit() {
     preview.innerHTML = `<h4>📊 Allocation Preview</h4>
       <div class="calc-row"><span>Welfare Offering</span><span class="amt">${fmt(welfare)}</span></div>
       <div class="calc-row total"><span>→ Goes to Welfare Fund</span><span class="amt text-red">${fmt(welfare)}</span></div>
-      <div style="font-size:12px;color:var(--muted);margin-top:8px;">⚠ No tithe is deducted from welfare offerings</div>`;
+      <div style="font-size:12px;color:var(--muted);margin-top:8px;">⚠ No church tithe is deducted from welfare offerings</div>`;
     return;
   }
 
   if (type === 'womens_ministry') {
-    const tithe = womens * titheRate;
-    const remaining = womens - tithe;
-    const generalTithe = general * titheRate;
-    const generalAfterTithe = general - generalTithe;
-    const savings = generalAfterTithe * savingsRate;
-    const operational = generalAfterTithe * opRate;
+    const wTithe = womens * titheRate;
+    const remaining = womens - wTithe;
+    const combined = general + directTithe;
+    const churchTithe = combined * titheRate;
+    const afterTithe = combined - churchTithe;
+    const savings = afterTithe * savingsRate;
+    const operational = afterTithe * opRate;
     preview.innerHTML = `<h4>📊 Allocation Preview</h4>
       <div class="calc-row"><span>General Offering</span><span class="amt">${fmt(general)}</span></div>
-      <div class="calc-row"><span>├─ Tithe (${appData.settings.tithe_rate||10}%)</span><span class="amt text-gold">${fmt(generalTithe)}</span></div>
-      <div class="calc-row"><span>├─ Church Savings (${appData.settings.savings_rate||60}% of remainder)</span><span class="amt text-green">${fmt(savings)}</span></div>
-      <div class="calc-row"><span>└─ Operational (${appData.settings.operational_rate||40}% of remainder)</span><span class="amt">${fmt(operational)}</span></div>
+      <div class="calc-row"><span>Tithe Received</span><span class="amt text-gold">${fmt(directTithe)}</span></div>
+      <div class="calc-row"><span>├─ Church Tithe (${appData.settings.tithe_rate||10}% of GH₵${combined.toFixed(2)})</span><span class="amt text-gold">${fmt(churchTithe)}</span></div>
+      <div class="calc-row"><span>├─ Church Savings (${appData.settings.savings_rate||60}%)</span><span class="amt text-green">${fmt(savings)}</span></div>
+      <div class="calc-row"><span>└─ Operational (${appData.settings.operational_rate||40}%)</span><span class="amt">${fmt(operational)}</span></div>
       <hr class="divider">
       <div class="calc-row"><span>Women's Ministry Offering</span><span class="amt">${fmt(womens)}</span></div>
-      <div class="calc-row"><span>├─ Tithe (${appData.settings.tithe_rate||10}%)</span><span class="amt text-gold">${fmt(tithe)}</span></div>
-      <div class="calc-row"><span>└─ Women's Ministry Fund (ring-fenced)</span><span class="amt" style="color:#7b1fa2">${fmt(remaining)}</span></div>
-      <div class="calc-row total"><span>Welfare</span><span class="amt text-red">${fmt(welfare)}</span></div>`;
+      <div class="calc-row"><span>├─ Tithe (${appData.settings.tithe_rate||10}%)</span><span class="amt text-gold">${fmt(wTithe)}</span></div>
+      <div class="calc-row"><span>└─ Women's Fund (ring-fenced)</span><span class="amt" style="color:#7b1fa2">${fmt(remaining)}</span></div>
+      ${welfare > 0 ? `<div class="calc-row"><span>Welfare Offering</span><span class="amt text-red">${fmt(welfare)}</span></div>` : ''}`;
     return;
   }
 
-  const tithe = general * titheRate;
-  const afterTithe = general - tithe;
+  const combined = general + directTithe;
+  const churchTithe = combined * titheRate;
+  const afterTithe = combined - churchTithe;
   const savings = afterTithe * savingsRate;
   const operational = afterTithe * opRate;
-  const total = general + welfare;
+  const total = combined + welfare;
 
   preview.innerHTML = `<h4>📊 Automatic Allocation Preview</h4>
-    <div class="calc-row"><span>Total Offering Received</span><span class="amt font-bold">${fmt(general)}</span></div>
-    <div class="calc-row"><span>├─ Tithe Deducted (${appData.settings.tithe_rate||10}%)</span><span class="amt text-gold">${fmt(tithe)}</span></div>
-    <div class="calc-row"><span>├─ Church Savings (${appData.settings.savings_rate||60}% of GH₵${afterTithe.toFixed(2)})</span><span class="amt text-green">${fmt(savings)}</span></div>
+    <div class="calc-row"><span>General Offering</span><span class="amt">${fmt(general)}</span></div>
+    <div class="calc-row"><span>Tithe Received</span><span class="amt text-gold">${fmt(directTithe)}</span></div>
+    <div class="calc-row"><span>Combined Total</span><span class="amt font-bold">${fmt(combined)}</span></div>
+    <hr class="divider">
+    <div class="calc-row"><span>├─ Church Tithe (${appData.settings.tithe_rate||10}%) → Tithe Fund</span><span class="amt text-gold">${fmt(churchTithe)}</span></div>
+    <div class="calc-row"><span>├─ Church Savings (${appData.settings.savings_rate||60}%)</span><span class="amt text-green">${fmt(savings)}</span></div>
     <div class="calc-row"><span>└─ Operational Fund (${appData.settings.operational_rate||40}%)</span><span class="amt">${fmt(operational)}</span></div>
     ${welfare > 0 ? `<div class="calc-row"><span>Welfare Offering (separate fund)</span><span class="amt text-red">${fmt(welfare)}</span></div>` : ''}
     <div class="calc-row total"><span>Total Recorded</span><span>${fmt(total)}</span></div>`;
@@ -645,37 +703,40 @@ async function saveIncome() {
   const type = document.getElementById('inc-type').value;
   const date = document.getElementById('inc-date').value;
   const general = parseFloat(document.getElementById('inc-general')?.value||0);
+  const directTithe = parseFloat(document.getElementById('inc-tithe-direct')?.value||0);
   const welfare = parseFloat(document.getElementById('inc-welfare')?.value||0);
   const womens = parseFloat(document.getElementById('inc-womens')?.value||0);
   const notes = document.getElementById('inc-notes').value;
   const msg = document.getElementById('income-msg');
 
   if (!date) { msg.innerHTML = '<div class="alert alert-error">Please select a service date</div>'; return; }
-  if (general <= 0 && welfare <= 0 && womens <= 0) { msg.innerHTML = '<div class="alert alert-error">Please enter at least one amount</div>'; return; }
+  const combined = general + directTithe;
+  if (combined <= 0 && welfare <= 0 && womens <= 0) { msg.innerHTML = '<div class="alert alert-error">Please enter at least one amount</div>'; return; }
 
   const titheRate = parseFloat(appData.settings.tithe_rate||10)/100;
   const savingsRate = parseFloat(appData.settings.savings_rate||60)/100;
   const opRate = parseFloat(appData.settings.operational_rate||40)/100;
 
   let tithe = 0, savings = 0, operational = 0, womens_amt = 0, welfare_amt = welfare;
+  const combined = general + directTithe;
 
   if (type === 'welfare') {
     welfare_amt = welfare;
   } else if (type === 'womens_ministry') {
     const wTithe = womens * titheRate;
     womens_amt = womens - wTithe;
-    tithe = wTithe + (general * titheRate);
-    const afterTithe = general - (general * titheRate);
+    tithe = wTithe + (combined * titheRate);
+    const afterTithe = combined - (combined * titheRate);
     savings = afterTithe * savingsRate;
     operational = afterTithe * opRate;
   } else {
-    tithe = general * titheRate;
-    const afterTithe = general - tithe;
+    tithe = combined * titheRate;
+    const afterTithe = combined - tithe;
     savings = afterTithe * savingsRate;
     operational = afterTithe * opRate;
   }
 
-  const total = (type === 'welfare') ? welfare : general + welfare + womens;
+  const total = (type === 'welfare') ? welfare : combined + welfare + womens;
 
   try {
     const { data: rec, error } = await db.from('income_records').insert({
@@ -686,10 +747,6 @@ async function saveIncome() {
     }).select().single();
     if (error) throw error;
 
-    // Update pot balances
-    const updates = [];
-    if (tithe > 0) updates.push(db.from('fund_pots').update({ balance: db.raw ? null : undefined }).eq('name','tithe'));
-    // Use RPC-style increment
     await Promise.all([
       tithe > 0 && incrementPot('tithe', tithe),
       savings > 0 && incrementPot('savings', savings),
@@ -720,7 +777,7 @@ async function decrementPot(potName, amount) {
 }
 
 function clearIncomeForm() {
-  ['inc-general','inc-welfare','inc-womens','inc-notes'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+  ['inc-general','inc-tithe-direct','inc-welfare','inc-womens','inc-notes'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   document.getElementById('inc-date').value = today();
   document.getElementById('income-calc-preview').innerHTML = '';
 }
@@ -735,8 +792,9 @@ async function loadIncome() {
   const el = document.getElementById('income-table');
   if (!el) return;
   if (!data || !data.length) { el.innerHTML = '<div class="empty-state"><div class="icon">📋</div><p>No income records found</p></div>'; return; }
+  const canEdit = ['finance_admin','lead_pastor'].includes(currentUser.role);
   el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Date</th><th>Service</th><th>Total</th><th>Tithe</th><th>Savings</th><th>Operational</th><th>Welfare</th><th>Women's</th><th>By</th></tr></thead>
+    <thead><tr><th>Date</th><th>Service</th><th>Total</th><th>Tithe</th><th>Savings</th><th>Operational</th><th>Welfare</th><th>Women's</th><th>By</th>${canEdit?'<th>Actions</th>':''}</tr></thead>
     <tbody>${data.map(r => `<tr>
       <td>${fmtDate(r.service_date)}</td>
       <td>${r.service_type.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase())}</td>
@@ -747,8 +805,97 @@ async function loadIncome() {
       <td class="text-red">${fmt(r.welfare_amount)}</td>
       <td style="color:#7b1fa2">${fmt(r.womens_ministry_amount)}</td>
       <td class="text-muted">${r.recorded_by_user?.name||'—'}</td>
+      ${canEdit ? `<td style="white-space:nowrap;"><button class="btn btn-sm btn-secondary" onclick="editIncomeRecord('${r.id}')">✏ Edit</button> <button class="btn btn-sm btn-danger" onclick="deleteIncomeRecord('${r.id}',${r.tithe_amount},${r.savings_amount},${r.operational_amount},${r.womens_ministry_amount},${r.welfare_amount})">🗑</button></td>` : ''}
     </tr>`).join('')}</tbody>
   </table></div>`;
+}
+
+// FIX 2: Edit & Delete Income Records
+async function editIncomeRecord(id) {
+  const { data: r } = await db.from('income_records').select('*').eq('id',id).single();
+  if (!r) return;
+  openModal('edit-income', `
+    <button class="modal-close" onclick="closeModal('edit-income')">✕</button>
+    <h3>✏ Edit Income Record</h3>
+    <div class="alert alert-warning">Editing will reverse the original fund allocations and reapply new ones.</div>
+    <div class="form-grid">
+      <div class="form-group"><label>Service Date</label><input type="date" id="ei-date" value="${r.service_date}"></div>
+      <div class="form-group"><label>Service Type</label><select id="ei-type">
+        <option value="sunday_service" ${r.service_type==='sunday_service'?'selected':''}>Sunday Service</option>
+        <option value="midweek" ${r.service_type==='midweek'?'selected':''}>Midweek Service</option>
+        <option value="special_service" ${r.service_type==='special_service'?'selected':''}>Special Service</option>
+        <option value="womens_ministry" ${r.service_type==='womens_ministry'?'selected':''}>Women's Ministry</option>
+        <option value="welfare" ${r.service_type==='welfare'?'selected':''}>Welfare Offering Only</option>
+        <option value="other" ${r.service_type==='other'?'selected':''}>Other</option>
+      </select></div>
+      <div class="form-group"><label>General Offering (GH₵)</label><input type="number" id="ei-general" value="${parseFloat(r.total_amount) - parseFloat(r.tithe_amount||0) - parseFloat(r.welfare_amount||0) - parseFloat(r.womens_ministry_amount||0)}" min="0" step="0.01"></div>
+      <div class="form-group"><label>Tithe Received (GH₵)</label><input type="number" id="ei-tithe" value="0" min="0" step="0.01"></div>
+      <div class="form-group"><label>Welfare Offering (GH₵)</label><input type="number" id="ei-welfare" value="${r.welfare_amount||0}" min="0" step="0.01"></div>
+      <div class="form-group"><label>Women's Ministry (GH₵)</label><input type="number" id="ei-womens" value="${r.womens_ministry_amount > 0 ? (parseFloat(r.womens_ministry_amount) / (1 - parseFloat(appData.settings.tithe_rate||10)/100)).toFixed(2) : 0}" min="0" step="0.01"></div>
+      <div class="form-group full"><label>Notes</label><textarea id="ei-notes">${r.notes||''}</textarea></div>
+    </div>
+    <div id="ei-msg"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('edit-income')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditIncome('${id}',${r.tithe_amount},${r.savings_amount},${r.operational_amount},${r.womens_ministry_amount},${r.welfare_amount})">Save Changes</button>
+    </div>
+  `);
+}
+
+async function saveEditIncome(id, oldTithe, oldSavings, oldOp, oldWomens, oldWelfare) {
+  const date = document.getElementById('ei-date').value;
+  const type = document.getElementById('ei-type').value;
+  const general = parseFloat(document.getElementById('ei-general').value||0);
+  const directTithe = parseFloat(document.getElementById('ei-tithe').value||0);
+  const welfare = parseFloat(document.getElementById('ei-welfare').value||0);
+  const womens = parseFloat(document.getElementById('ei-womens').value||0);
+  const notes = document.getElementById('ei-notes').value;
+  const titheRate = parseFloat(appData.settings.tithe_rate||10)/100;
+  const savingsRate = parseFloat(appData.settings.savings_rate||60)/100;
+  const opRate = parseFloat(appData.settings.operational_rate||40)/100;
+
+  let tithe=0, savings=0, operational=0, womens_amt=0, welfare_amt=welfare;
+  const combined = general + directTithe;
+  if (type==='welfare') { welfare_amt=welfare; }
+  else if (type==='womens_ministry') {
+    const wTithe = womens*titheRate; womens_amt=womens-wTithe;
+    tithe = wTithe + combined*titheRate;
+    const at = combined - combined*titheRate; savings=at*savingsRate; operational=at*opRate;
+  } else {
+    tithe=combined*titheRate; const at=combined-tithe; savings=at*savingsRate; operational=at*opRate;
+  }
+  const total = type==='welfare' ? welfare : combined+welfare+womens;
+
+  // Reverse old, apply new
+  await loadGlobalData();
+  await Promise.all([
+    decrementPot('tithe', parseFloat(oldTithe)), decrementPot('savings', parseFloat(oldSavings)),
+    decrementPot('operational', parseFloat(oldOp)), decrementPot('womens_ministry', parseFloat(oldWomens)),
+    decrementPot('welfare', parseFloat(oldWelfare))
+  ]);
+  await loadGlobalData();
+  await Promise.all([
+    tithe>0 && incrementPot('tithe',tithe), savings>0 && incrementPot('savings',savings),
+    operational>0 && incrementPot('operational',operational), womens_amt>0 && incrementPot('womens_ministry',womens_amt),
+    welfare_amt>0 && incrementPot('welfare',welfare_amt)
+  ].filter(Boolean));
+
+  await db.from('income_records').update({ service_date:date, service_type:type, total_amount:total, tithe_amount:tithe, savings_amount:savings, operational_amount:operational, womens_ministry_amount:womens_amt, welfare_amount:welfare_amt, notes }).eq('id',id);
+  await logAudit('INCOME_EDITED','income_records',id,{total,type,date});
+  closeModal('edit-income'); await loadGlobalData(); loadIncome();
+}
+
+async function deleteIncomeRecord(id, tithe, savings, op, womens, welfare) {
+  if (!confirm('Delete this income record? This will reverse the fund allocations.')) return;
+  await loadGlobalData();
+  await Promise.all([
+    decrementPot('tithe', parseFloat(tithe)), decrementPot('savings', parseFloat(savings)),
+    decrementPot('operational', parseFloat(op)), decrementPot('womens_ministry', parseFloat(womens)),
+    decrementPot('welfare', parseFloat(welfare))
+  ]);
+  await db.from('income_records').delete().eq('id', id);
+  await logAudit('INCOME_DELETED','income_records',id,{tithe,savings,op});
+  await loadGlobalData(); loadIncome();
 }
 
 // =============================================
@@ -1095,14 +1242,16 @@ async function loadSavings() {
     </div>`;
   const el = document.getElementById('savings-table');
   if (!withdrawals || !withdrawals.length) { el.innerHTML = '<div class="empty-state"><p>No withdrawals yet</p></div>'; return; }
+  const canEdit = ['finance_admin','lead_pastor'].includes(currentUser.role);
   el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Date</th><th>Amount</th><th>Reason</th><th>Notes</th><th>By</th></tr></thead>
+    <thead><tr><th>Date</th><th>Amount</th><th>Reason</th><th>Notes</th><th>By</th>${canEdit?'<th>Actions</th>':''}</tr></thead>
     <tbody>${withdrawals.map(w=>`<tr>
       <td>${fmtDate(w.withdrawal_date)}</td>
       <td class="text-red font-bold">${fmt(w.amount)}</td>
       <td>${w.reason}</td>
       <td class="text-muted">${w.notes||'—'}</td>
       <td class="text-muted">${w.approved_by||'—'}</td>
+      ${canEdit ? `<td><button class="btn btn-sm btn-danger" onclick="deleteSavingsWithdrawal('${w.id}',${w.amount})">🗑 Delete</button></td>` : ''}
     </tr>`).join('')}</tbody>
   </table></div>`;
 }
@@ -1121,6 +1270,15 @@ async function saveSavingsWithdrawal() {
   await logAudit('SAVINGS_WITHDRAWAL', 'savings_withdrawals', null, { amount, reason, date });
   msg.innerHTML = '<div class="alert alert-success">✓ Savings withdrawal recorded</div>';
   document.getElementById('sw-amount').value = ''; document.getElementById('sw-reason').value = '';
+  await loadGlobalData(); loadSavings();
+}
+
+async function deleteSavingsWithdrawal(id, amount) {
+  if (!confirm('Delete this withdrawal record? The amount will be returned to savings.')) return;
+  await db.from('savings_withdrawals').delete().eq('id', id);
+  await loadGlobalData();
+  await incrementPot('savings', parseFloat(amount));
+  await logAudit('SAVINGS_WITHDRAWAL_DELETED','savings_withdrawals',id,{amount});
   await loadGlobalData(); loadSavings();
 }
 
@@ -1396,8 +1554,9 @@ async function loadReports() {
 async function generateMonthlyReport() {
   const month = document.getElementById('rep-month').value;
   if (!month) return;
+  const [year, mon] = month.split('-').map(Number);
   const firstDay = month + '-01';
-  const lastDay = month + '-31';
+  const lastDay = new Date(year, mon, 0).toISOString().split('T')[0]; // last day of month
   const [{ data: income }, { data: requests }, { data: welfare }] = await Promise.all([
     db.from('income_records').select('*').gte('service_date',firstDay).lte('service_date',lastDay),
     db.from('fund_requests').select('*').gte('created_at',firstDay+'T00:00:00').lte('created_at',lastDay+'T23:59:59'),
@@ -1446,7 +1605,10 @@ async function generateMonthlyReport() {
 async function exportMonthlyCSV() {
   const month = document.getElementById('rep-month').value;
   if (!month) return;
-  const { data: income } = await db.from('income_records').select('*').gte('service_date', month+'-01').lte('service_date', month+'-31');
+  const [year, mon] = month.split('-').map(Number);
+  const firstDay = month + '-01';
+  const lastDay = new Date(year, mon, 0).toISOString().split('T')[0];
+  const { data: income } = await db.from('income_records').select('*').gte('service_date', firstDay).lte('service_date', lastDay);
   if (!income || !income.length) { alert('No data for this month'); return; }
   const headers = ['Date','Service Type','Total','Tithe','Savings','Operational','Welfare','Womens Ministry','Notes'];
   const rows = income.map(r => [r.service_date, r.service_type, r.total_amount, r.tithe_amount, r.savings_amount, r.operational_amount, r.welfare_amount, r.womens_ministry_amount, r.notes||''].join(','));
@@ -1597,6 +1759,15 @@ function pageSettings() {
       </div>
       <div id="settings-msg" class="mt-8"></div>
     </div>
+    ${currentUser?.role === 'lead_pastor' ? `
+    <div class="card" style="border:2px solid var(--red);">
+      <div class="card-title" style="color:var(--red);">⚠ Danger Zone — Clear Test Data</div>
+      <div class="alert alert-error">This will permanently delete ALL income records, fund requests, welfare disbursements, savings withdrawals, pledges, campaigns and reset all fund pot balances to zero. Users and settings are kept. This cannot be undone.</div>
+      <div class="btn-group mt-16">
+        <button class="btn btn-danger" onclick="clearAllTestData()">🗑 Clear All Data & Reset Balances</button>
+      </div>
+      <div id="clear-msg" class="mt-8"></div>
+    </div>` : ''}
   `;
 }
 
@@ -1634,6 +1805,32 @@ async function saveSettings() {
   await loadGlobalData();
   msg.innerHTML = '<div class="alert alert-success">✓ Settings saved</div>';
   loadSettings();
+}
+
+async function clearAllTestData() {
+  if (!confirm('Are you sure? This will DELETE ALL financial data and reset all balances to zero. This cannot be undone.')) return;
+  if (!confirm('Final confirmation — delete everything and reset balances?')) return;
+  const msg = document.getElementById('clear-msg');
+  if (msg) msg.innerHTML = '<div class="alert alert-info">Clearing data...</div>';
+  try {
+    await Promise.all([
+      db.from('pledge_payments').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      db.from('pledges').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      db.from('campaigns').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      db.from('welfare_disbursements').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      db.from('savings_withdrawals').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      db.from('fund_requests').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      db.from('income_records').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+      db.from('audit_log').delete().neq('id', '00000000-0000-0000-0000-000000000000'),
+    ]);
+    // Reset all pot balances to zero
+    const pots = ['tithe','savings','operational','womens_ministry','welfare'];
+    await Promise.all(pots.map(p => db.from('fund_pots').update({ balance: 0, updated_at: new Date().toISOString() }).eq('name', p)));
+    await loadGlobalData();
+    if (msg) msg.innerHTML = '<div class="alert alert-success">✓ All test data cleared and balances reset to zero.</div>';
+  } catch(e) {
+    if (msg) msg.innerHTML = `<div class="alert alert-error">Error: ${e.message}</div>`;
+  }
 }
 
 // Init on load
