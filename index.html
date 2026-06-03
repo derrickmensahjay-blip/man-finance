@@ -284,12 +284,17 @@ const ROLE_LABELS = {
   lead_pastor: 'Lead Pastor',
   finance_admin: 'Finance Admin',
   department_head: 'Department Head',
-  womens_ministry_lead: "Women's Ministry Lead"
+  womens_ministry_lead: "Women's Ministry Lead",
+  youth_ministry_lead: "Youth Ministry Lead",
+  children_ministry_lead: "Children's Ministry Lead"
 };
+
+const MINISTRY_OFFERING_ROLES = ['womens_ministry_lead','youth_ministry_lead','children_ministry_lead'];
+const ALL_DEPT_ROLES = ['department_head','womens_ministry_lead','youth_ministry_lead','children_ministry_lead'];
 
 const NAV_CONFIG = [
   { section: 'Overview', items: [
-    { id: 'dashboard', label: 'Dashboard', icon: '⊞', roles: ['lead_pastor','finance_admin','womens_ministry_lead'] }
+    { id: 'dashboard', label: 'Dashboard', icon: '⊞', roles: ['lead_pastor','finance_admin','womens_ministry_lead','youth_ministry_lead','children_ministry_lead','department_head'] }
   ]},
   { section: 'Finance', items: [
     { id: 'income', label: 'Record Income', icon: '↑', roles: ['finance_admin','lead_pastor'] },
@@ -298,7 +303,7 @@ const NAV_CONFIG = [
     { id: 'savings', label: 'Savings & Reserves', icon: '◈', roles: ['finance_admin','lead_pastor'] },
   ]},
   { section: 'Requests', items: [
-    { id: 'requests', label: 'Fund Requests', icon: '⇌', roles: ['lead_pastor','finance_admin','department_head','womens_ministry_lead'] }
+    { id: 'requests', label: 'Fund Requests', icon: '⇌', roles: ['lead_pastor','finance_admin','department_head','womens_ministry_lead','youth_ministry_lead','children_ministry_lead'] }
   ]},
   { section: 'Reports', items: [
     { id: 'reports', label: 'Reports & Export', icon: '▤', roles: ['lead_pastor','finance_admin'] },
@@ -344,7 +349,7 @@ async function initApp() {
   await loadGlobalData();
   buildSidebar();
   buildPages();
-  // Dept heads go straight to requests; womens lead gets mini dashboard
+  // Dept heads go straight to requests; ministry leads get dashboard
   if (currentUser.role === 'department_head') {
     navigateTo('requests');
   } else {
@@ -457,9 +462,14 @@ function pageDashboard() {
 }
 
 async function loadDashboard() {
-  // Women's Ministry Lead sees mini dashboard — their fund only
-  if (currentUser.role === 'womens_ministry_lead') {
-    loadWomensDashboard();
+  // Ministry leads with own funds get mini dashboard
+  if (MINISTRY_OFFERING_ROLES.includes(currentUser.role)) {
+    loadMinistryDashboard();
+    return;
+  }
+  // Standard dept heads get dept dashboard
+  if (currentUser.role === 'department_head') {
+    loadDeptDashboard();
     return;
   }
   document.getElementById('dash-date').textContent = new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
@@ -469,6 +479,8 @@ async function loadDashboard() {
     { key:'savings', label:'Church Savings (60%)', color:'', icon:'◈' },
     { key:'operational', label:'Operational (40%)', color:'blue', icon:'⚙' },
     { key:'womens_ministry', label:"Women's Ministry", color:'purple', icon:'♀' },
+    { key:'youth_ministry', label:"Youth Ministry", color:'purple', icon:'★' },
+    { key:'children_ministry', label:"Children's Ministry", color:'purple', icon:'♦' },
     { key:'welfare', label:'Welfare Fund', color:'red', icon:'♥' }
   ];
   document.getElementById('pots-grid').innerHTML = potDefs.map(p => `
@@ -529,27 +541,40 @@ async function loadDashboard() {
   }
 }
 
-async function loadWomensDashboard() {
-  const pot = appData.pots['womens_ministry'];
+async function loadMinistryDashboard() {
+  const potMap = {
+    womens_ministry_lead: 'womens_ministry',
+    youth_ministry_lead: 'youth_ministry',
+    children_ministry_lead: 'children_ministry'
+  };
+  const labelMap = {
+    womens_ministry_lead: "Women's Ministry",
+    youth_ministry_lead: "Youth Ministry",
+    children_ministry_lead: "Children's Ministry"
+  };
+  const potKey = potMap[currentUser.role];
+  const label = labelMap[currentUser.role];
+  const pot = appData.pots[potKey];
   const now = new Date();
   const firstDay = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split('T')[0];
-  const { data: myReqs } = await db.from('fund_requests').select('*').eq('requested_by', currentUser.id).order('created_at',{ascending:false}).limit(5);
-  const { data: monthIncome } = await db.from('income_records').select('womens_ministry_amount').gte('service_date', firstDay);
-  const monthWomens = (monthIncome||[]).reduce((s,r)=>s+parseFloat(r.womens_ministry_amount||0),0);
+  const { data: myReqs } = await db.from('fund_requests').select('*').eq('requested_by', currentUser.id).order('created_at',{ascending:false}).limit(10);
+  const { data: monthIncome } = await db.from('income_records').select('*').gte('service_date', firstDay);
+  const incomeField = potKey + '_amount';
+  const monthAmt = (monthIncome||[]).reduce((s,r)=>s+parseFloat(r[incomeField]||0),0);
 
   const dashEl = document.getElementById('pots-grid');
   if (dashEl) dashEl.innerHTML = `
-    <div class="pot-card purple" style="grid-column:1/-1;max-width:360px;">
-      <div class="pot-name">♀ Women's Ministry Fund Balance</div>
+    <div class="pot-card purple" style="max-width:360px;">
+      <div class="pot-name">♀ ${label} Fund Balance</div>
       <div class="pot-balance" style="font-size:32px;color:#7b1fa2">${fmt(pot?.balance||0)}</div>
       <div class="pot-sub">Ring-fenced funds available</div>
     </div>
-    <div class="pot-card"><div class="pot-name">This Month's Offering</div><div class="pot-balance">${fmt(monthWomens)}</div><div class="pot-sub">Women's offering received</div></div>
+    <div class="pot-card"><div class="pot-name">This Month's Offering</div><div class="pot-balance">${fmt(monthAmt)}</div><div class="pot-sub">Received this month</div></div>
     <div class="pot-card gold"><div class="pot-name">My Requests</div><div class="pot-balance">${(myReqs||[]).length}</div><div class="pot-sub">Total submitted</div></div>
     <div class="pot-card red"><div class="pot-name">Pending</div><div class="pot-balance">${(myReqs||[]).filter(r=>r.status==='pending').length}</div><div class="pot-sub">Awaiting approval</div></div>
   `;
   const summaryEl = document.getElementById('month-summary');
-  if (summaryEl) summaryEl.innerHTML = `<div class="text-muted" style="font-size:13px;">Your Women's Ministry fund balance is shown above. Use <strong>Fund Requests</strong> to request disbursements.</div>`;
+  if (summaryEl) summaryEl.innerHTML = `<div class="text-muted" style="font-size:13px;">Your ${label} fund balance is shown above. Use <strong>Fund Requests</strong> to request disbursements.</div>`;
   const pendingEl = document.getElementById('pending-requests-dash');
   if (pendingEl) {
     const pending = (myReqs||[]).filter(r=>r.status==='pending');
@@ -565,6 +590,116 @@ async function loadWomensDashboard() {
   </table></div>` : '<div class="empty-state"><p>No requests submitted yet</p></div>';
   const dateEl = document.getElementById('dash-date');
   if (dateEl) dateEl.textContent = new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+}
+
+async function loadDeptDashboard() {
+  const now = new Date();
+  const filterMonth = document.getElementById('dept-dash-month')?.value || '';
+  const filterYear = document.getElementById('dept-dash-year')?.value || '';
+
+  let query = db.from('fund_requests').select('*').eq('requested_by', currentUser.id);
+  if (filterMonth && filterYear) {
+    const fm = `${filterYear}-${filterMonth.padStart(2,'0')}-01`;
+    const lm = new Date(parseInt(filterYear), parseInt(filterMonth), 0).toISOString().split('T')[0];
+    query = query.gte('created_at', fm+'T00:00:00').lte('created_at', lm+'T23:59:59');
+  } else if (filterYear) {
+    query = query.gte('created_at', filterYear+'-01-01T00:00:00').lte('created_at', filterYear+'-12-31T23:59:59');
+  }
+  const { data: reqs } = await query.order('created_at',{ascending:false});
+  const all = reqs||[];
+  const totalReq = all.reduce((s,r)=>s+parseFloat(r.amount_requested||0),0);
+  const totalApproved = all.filter(r=>['approved','disbursed','reconciled'].includes(r.status)).reduce((s,r)=>s+parseFloat(r.amount_requested||0),0);
+  const totalSpent = all.filter(r=>r.status==='reconciled').reduce((s,r)=>s+parseFloat(r.amount_spent||0),0);
+
+  const dashEl = document.getElementById('pots-grid');
+  if (dashEl) dashEl.innerHTML = `
+    <div class="pot-card"><div class="pot-name">📋 Total Requested</div><div class="pot-balance">${fmt(totalReq)}</div><div class="pot-sub">${all.length} requests</div></div>
+    <div class="pot-card gold"><div class="pot-name">✓ Approved</div><div class="pot-balance">${fmt(totalApproved)}</div><div class="pot-sub">${all.filter(r=>['approved','disbursed','reconciled'].includes(r.status)).length} requests</div></div>
+    <div class="pot-card red"><div class="pot-name">⏳ Pending</div><div class="pot-balance text-red">${all.filter(r=>r.status==='pending').length}</div><div class="pot-sub">Awaiting approval</div></div>
+    <div class="pot-card blue"><div class="pot-name">📋 Pending Reconciliation</div><div class="pot-balance" style="color:var(--blue)">${all.filter(r=>r.status==='disbursed').length}</div><div class="pot-sub">Disbursed, not reconciled</div></div>
+    <div class="pot-card"><div class="pot-name">💸 Total Spent</div><div class="pot-balance">${fmt(totalSpent)}</div><div class="pot-sub">Reconciled</div></div>
+  `;
+
+  const summaryEl = document.getElementById('month-summary');
+  if (summaryEl) {
+    const qData = await loadDeptBudgets();
+    summaryEl.innerHTML = `
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;">
+        <select id="dept-dash-month" style="padding:6px 10px;border:1.5px solid #ddd;border-radius:7px;font-size:12px;" onchange="loadDeptDashboard()">
+          <option value="">All Months</option>
+          ${['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'].map((m,i)=>`<option value="${i+1}" ${filterMonth==i+1?'selected':''}>${m}</option>`).join('')}
+        </select>
+        <select id="dept-dash-year" style="padding:6px 10px;border:1.5px solid #ddd;border-radius:7px;font-size:12px;" onchange="loadDeptDashboard()">
+          <option value="">All Years</option>
+          ${[2024,2025,2026,2027].map(y=>`<option value="${y}" ${filterYear==y?'selected':''}>${y}</option>`).join('')}
+        </select>
+      </div>
+      <div style="font-size:13px;color:var(--muted);">Department: <strong>${currentUser.department||'—'}</strong></div>
+      <div class="mt-8" style="font-size:13px;">
+        <strong>Quarterly Budgets:</strong>
+        ${qData.length ? qData.map(b=>`<div style="padding:4px 0;border-bottom:1px solid #f0f0f0;">${b.quarter} ${b.year} — ${fmt(b.total_amount)} <span class="badge badge-${b.status}">${b.status}</span></div>`).join('') : '<span class="text-muted">No budgets submitted yet</span>'}
+      </div>
+      <button class="btn btn-sm btn-primary mt-8" onclick="openSubmitBudget()">+ Submit Quarterly Budget</button>
+    `;
+  }
+
+  const pendingEl = document.getElementById('pending-requests-dash');
+  if (pendingEl) {
+    const pending = all.filter(r=>r.status==='pending');
+    pendingEl.innerHTML = pending.length ? `<div class="table-wrap"><table>
+      <thead><tr><th>Ref</th><th>Purpose</th><th>Amount</th><th>Date</th></tr></thead>
+      <tbody>${pending.map(r=>`<tr><td>${r.request_number}</td><td>${r.purpose}</td><td>${fmt(r.amount_requested)}</td><td>${fmtDate(r.created_at)}</td></tr>`).join('')}</tbody>
+    </table></div>` : '<div class="empty-state"><p>No pending requests</p></div>';
+  }
+
+  const recentEl = document.getElementById('recent-transactions');
+  if (recentEl) recentEl.innerHTML = all.length ? `<div class="table-wrap"><table>
+    <thead><tr><th>Ref</th><th>Purpose</th><th>Amount</th><th>Status</th><th>Date</th></tr></thead>
+    <tbody>${all.slice(0,10).map(r=>`<tr><td>${r.request_number}</td><td>${r.purpose}</td><td>${fmt(r.amount_requested)}</td><td><span class="badge badge-${r.status}">${r.status}</span></td><td>${fmtDate(r.created_at)}</td></tr>`).join('')}</tbody>
+  </table></div>` : '<div class="empty-state"><p>No requests yet</p></div>';
+
+  const dateEl = document.getElementById('dash-date');
+  if (dateEl) dateEl.textContent = new Date().toLocaleDateString('en-GB',{weekday:'long',day:'numeric',month:'long',year:'numeric'});
+}
+
+async function loadDeptBudgets() {
+  const { data } = await db.from('dept_budgets').select('*').eq('department', currentUser.department).order('year',{ascending:false}).order('quarter',{ascending:false});
+  return data||[];
+}
+
+function openSubmitBudget() {
+  openModal('submit-budget', `
+    <button class="modal-close" onclick="closeModal('submit-budget')">✕</button>
+    <h3>Submit Quarterly Budget Estimate</h3>
+    <div class="form-grid">
+      <div class="form-group"><label>Year</label><input type="number" id="bq-year" value="${new Date().getFullYear()}" min="2024" max="2030"></div>
+      <div class="form-group"><label>Quarter</label><select id="bq-quarter">
+        <option value="Q1">Q1 (Jan–Mar)</option>
+        <option value="Q2">Q2 (Apr–Jun)</option>
+        <option value="Q3">Q3 (Jul–Sep)</option>
+        <option value="Q4">Q4 (Oct–Dec)</option>
+      </select></div>
+      <div class="form-group full"><label>Total Budget Estimate (GH₵)</label><input type="number" id="bq-amount" placeholder="0.00" min="0" step="0.01"></div>
+      <div class="form-group full"><label>Budget Breakdown / Notes</label><textarea id="bq-notes" placeholder="List the key items and estimated costs..."></textarea></div>
+    </div>
+    <div id="bq-msg"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('submit-budget')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveQuarterlyBudget()">Submit Budget</button>
+    </div>
+  `);
+}
+
+async function saveQuarterlyBudget() {
+  const year = document.getElementById('bq-year').value;
+  const quarter = document.getElementById('bq-quarter').value;
+  const amount = parseFloat(document.getElementById('bq-amount').value||0);
+  const notes = document.getElementById('bq-notes').value;
+  if (!year || amount <= 0) { document.getElementById('bq-msg').innerHTML = '<div class="alert alert-error">Year and amount required</div>'; return; }
+  const { error } = await db.from('dept_budgets').insert({ department: currentUser.department, submitted_by: currentUser.id, year: parseInt(year), quarter, total_amount: amount, notes, status: 'pending' });
+  if (error) { document.getElementById('bq-msg').innerHTML = `<div class="alert alert-error">${error.message}</div>`; return; }
+  closeModal('submit-budget');
+  loadDeptDashboard();
 }
 
 // =============================================
@@ -590,6 +725,8 @@ function pageIncome() {
             <option value="midweek">Midweek Service</option>
             <option value="special_service">Special Service</option>
             <option value="womens_ministry">Women's Ministry Service</option>
+            <option value="youth_ministry">Youth Ministry Service</option>
+            <option value="children_ministry">Children's Ministry Service</option>
             <option value="welfare">Welfare Offering Only</option>
             <option value="pledge_fulfillment">Pledge Fulfillment</option>
             <option value="other">Other</option>
@@ -610,6 +747,14 @@ function pageIncome() {
         <div class="form-group" id="inc-womens-group" style="display:none">
           <label>Women's Ministry Offering (GH₵)</label>
           <input type="number" id="inc-womens" placeholder="0.00" min="0" step="0.01" oninput="calcIncomeSplit()">
+        </div>
+        <div class="form-group" id="inc-youth-group" style="display:none">
+          <label>Youth Ministry Offering (GH₵)</label>
+          <input type="number" id="inc-youth" placeholder="0.00" min="0" step="0.01" oninput="calcIncomeSplit()">
+        </div>
+        <div class="form-group" id="inc-children-group" style="display:none">
+          <label>Children's Ministry Offering (GH₵)</label>
+          <input type="number" id="inc-children" placeholder="0.00" min="0" step="0.01" oninput="calcIncomeSplit()">
         </div>
         <div class="form-group full">
           <label>Notes</label>
@@ -646,6 +791,10 @@ function calcIncomeSplit() {
 
   const wg = document.getElementById('inc-womens-group');
   if (wg) wg.style.display = (type === 'womens_ministry') ? 'flex' : 'none';
+  const yg = document.getElementById('inc-youth-group');
+  if (yg) yg.style.display = (type === 'youth_ministry') ? 'flex' : 'none';
+  const cg = document.getElementById('inc-children-group');
+  if (cg) cg.style.display = (type === 'children_ministry') ? 'flex' : 'none';
 
   const preview = document.getElementById('income-calc-preview');
   if (!preview) return;
@@ -706,25 +855,33 @@ async function saveIncome() {
   const directTithe = parseFloat(document.getElementById('inc-tithe-direct')?.value||0);
   const welfare = parseFloat(document.getElementById('inc-welfare')?.value||0);
   const womens = parseFloat(document.getElementById('inc-womens')?.value||0);
+  const youth = parseFloat(document.getElementById('inc-youth')?.value||0);
+  const children = parseFloat(document.getElementById('inc-children')?.value||0);
   const notes = document.getElementById('inc-notes').value;
   const msg = document.getElementById('income-msg');
 
   if (!date) { msg.innerHTML = '<div class="alert alert-error">Please select a service date</div>'; return; }
   const combined = general + directTithe;
-  if (combined <= 0 && welfare <= 0 && womens <= 0) { msg.innerHTML = '<div class="alert alert-error">Please enter at least one amount</div>'; return; }
+  if (combined <= 0 && welfare <= 0 && womens <= 0 && youth <= 0 && children <= 0) { msg.innerHTML = '<div class="alert alert-error">Please enter at least one amount</div>'; return; }
 
   const titheRate = parseFloat(appData.settings.tithe_rate||10)/100;
   const savingsRate = parseFloat(appData.settings.savings_rate||60)/100;
   const opRate = parseFloat(appData.settings.operational_rate||40)/100;
 
-  let tithe = 0, savings = 0, operational = 0, womens_amt = 0, welfare_amt = welfare;
+  let tithe = 0, savings = 0, operational = 0, womens_amt = 0, welfare_amt = welfare, youth_amt = 0, children_amt = 0;
+
+  const ministryOfferingAmt = type === 'womens_ministry' ? womens : type === 'youth_ministry' ? youth : type === 'children_ministry' ? children : 0;
+  const ministryPotKey = type === 'womens_ministry' ? 'womens_ministry' : type === 'youth_ministry' ? 'youth_ministry' : type === 'children_ministry' ? 'children_ministry' : null;
 
   if (type === 'welfare') {
     welfare_amt = welfare;
-  } else if (type === 'womens_ministry') {
-    const wTithe = womens * titheRate;
-    womens_amt = womens - wTithe;
-    tithe = wTithe + (combined * titheRate);
+  } else if (ministryPotKey) {
+    const mTithe = ministryOfferingAmt * titheRate;
+    const mRest = ministryOfferingAmt - mTithe;
+    if (type === 'womens_ministry') womens_amt = mRest;
+    if (type === 'youth_ministry') youth_amt = mRest;
+    if (type === 'children_ministry') children_amt = mRest;
+    tithe = mTithe + (combined * titheRate);
     const afterTithe = combined - (combined * titheRate);
     savings = afterTithe * savingsRate;
     operational = afterTithe * opRate;
@@ -735,13 +892,14 @@ async function saveIncome() {
     operational = afterTithe * opRate;
   }
 
-  const total = (type === 'welfare') ? welfare : combined + welfare + womens;
+  const total = type === 'welfare' ? welfare : combined + welfare + ministryOfferingAmt;
 
   try {
     const { data: rec, error } = await db.from('income_records').insert({
       service_date: date, service_type: type, total_amount: total,
       tithe_amount: tithe, savings_amount: savings, operational_amount: operational,
       womens_ministry_amount: womens_amt, welfare_amount: welfare_amt,
+      youth_ministry_amount: youth_amt, children_ministry_amount: children_amt,
       notes, recorded_by: currentUser.id
     }).select().single();
     if (error) throw error;
@@ -752,6 +910,8 @@ async function saveIncome() {
       operational > 0 && incrementPot('operational', operational),
       womens_amt > 0 && incrementPot('womens_ministry', womens_amt),
       welfare_amt > 0 && incrementPot('welfare', welfare_amt),
+      youth_amt > 0 && incrementPot('youth_ministry', youth_amt),
+      children_amt > 0 && incrementPot('children_ministry', children_amt),
     ].filter(Boolean));
 
     await logAudit('INCOME_RECORDED', 'income_records', rec.id, { total, type, date });
@@ -776,7 +936,7 @@ async function decrementPot(potName, amount) {
 }
 
 function clearIncomeForm() {
-  ['inc-general','inc-tithe-direct','inc-welfare','inc-womens','inc-notes'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
+  ['inc-general','inc-tithe-direct','inc-welfare','inc-womens','inc-youth','inc-children','inc-notes'].forEach(id => { const el = document.getElementById(id); if(el) el.value = ''; });
   document.getElementById('inc-date').value = today();
   document.getElementById('income-calc-preview').innerHTML = '';
 }
@@ -909,7 +1069,7 @@ function pagePledges() {
     </div>
     <div class="tab-panel active" id="tab-pledges-campaigns">
       <div style="display:flex;justify-content:flex-end;margin-bottom:14px;">
-        <button class="btn btn-primary" onclick="openModal('new-campaign')">+ New Campaign</button>
+        <button class="btn btn-primary" onclick="openNewCampaign()">+ New Campaign</button>
       </div>
       <div id="campaigns-list"></div>
     </div>
@@ -1168,8 +1328,9 @@ async function loadWelfare() {
   const { data } = await db.from('welfare_disbursements').select('*, approved_by_user:users!welfare_disbursements_approved_by_fkey(name)').order('disbursement_date',{ascending:false});
   const el = document.getElementById('welfare-table');
   if (!data || !data.length) { el.innerHTML = '<div class="empty-state"><p>No disbursements yet</p></div>'; return; }
+  const canEdit = ['finance_admin','lead_pastor'].includes(currentUser.role);
   el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Date</th><th>Recipient</th><th>Phone</th><th>Amount</th><th>Purpose</th><th>By</th></tr></thead>
+    <thead><tr><th>Date</th><th>Recipient</th><th>Phone</th><th>Amount</th><th>Purpose</th><th>By</th>${canEdit?'<th>Actions</th>':''}</tr></thead>
     <tbody>${data.map(d=>`<tr>
       <td>${fmtDate(d.disbursement_date)}</td>
       <td><strong>${d.recipient_name}</strong></td>
@@ -1177,6 +1338,7 @@ async function loadWelfare() {
       <td class="text-red font-bold">${fmt(d.amount)}</td>
       <td>${d.purpose}</td>
       <td class="text-muted">${d.approved_by_user?.name||'—'}</td>
+      ${canEdit?`<td style="white-space:nowrap;"><button class="btn btn-sm btn-secondary" onclick="editWelfareDisbursement('${d.id}','${d.recipient_name.replace(/'/g,"\\'")}',${d.amount},'${d.disbursement_date}','${(d.purpose||'').replace(/'/g,"\\'")}')">✏ Edit</button> <button class="btn btn-sm btn-danger" onclick="deleteWelfareDisbursement('${d.id}',${d.amount})">🗑</button></td>`:''}
     </tr>`).join('')}</tbody>
   </table></div>`;
 }
@@ -1200,6 +1362,52 @@ async function saveWelfareDisbursement() {
   ['w-name','w-phone','w-amount','w-purpose','w-notes'].forEach(id => document.getElementById(id).value = '');
   await loadGlobalData();
   loadWelfare();
+}
+
+function editWelfareDisbursement(id, recipientName, amount, date, purpose) {
+  openModal('edit-welfare', `
+    <button class="modal-close" onclick="closeModal('edit-welfare')">✕</button>
+    <h3>✏ Edit Welfare Disbursement</h3>
+    <div class="form-grid">
+      <div class="form-group"><label>Recipient Name</label><input type="text" id="ew-name" value="${recipientName}"></div>
+      <div class="form-group"><label>Amount (GH₵)</label><input type="number" id="ew-amount" value="${amount}" min="0" step="0.01"></div>
+      <div class="form-group"><label>Date</label><input type="date" id="ew-date" value="${date}"></div>
+      <div class="form-group full"><label>Purpose</label><textarea id="ew-purpose">${purpose}</textarea></div>
+    </div>
+    <div id="ew-msg"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('edit-welfare')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditWelfare('${id}',${amount})">Save Changes</button>
+    </div>
+  `);
+}
+
+async function saveEditWelfare(id, oldAmount) {
+  const name = document.getElementById('ew-name').value.trim();
+  const newAmount = parseFloat(document.getElementById('ew-amount').value||0);
+  const date = document.getElementById('ew-date').value;
+  const purpose = document.getElementById('ew-purpose').value.trim();
+  if (!name || newAmount <= 0 || !date || !purpose) { document.getElementById('ew-msg').innerHTML = '<div class="alert alert-error">All fields required</div>'; return; }
+  const diff = newAmount - parseFloat(oldAmount);
+  if (diff > 0) {
+    const bal = parseFloat(appData.pots['welfare']?.balance||0);
+    if (diff > bal) { document.getElementById('ew-msg').innerHTML = `<div class="alert alert-error">Insufficient welfare funds for increase</div>`; return; }
+    await decrementPot('welfare', diff);
+  } else if (diff < 0) {
+    await incrementPot('welfare', Math.abs(diff));
+  }
+  await db.from('welfare_disbursements').update({ recipient_name:name, amount:newAmount, disbursement_date:date, purpose }).eq('id', id);
+  await logAudit('WELFARE_EDITED','welfare_disbursements',id,{name,newAmount});
+  closeModal('edit-welfare'); await loadGlobalData(); loadWelfare();
+}
+
+async function deleteWelfareDisbursement(id, amount) {
+  if (!confirm('Delete this disbursement? The amount will be returned to the welfare fund.')) return;
+  await db.from('welfare_disbursements').delete().eq('id', id);
+  await loadGlobalData();
+  await incrementPot('welfare', parseFloat(amount));
+  await logAudit('WELFARE_DELETED','welfare_disbursements',id,{amount});
+  await loadGlobalData(); loadWelfare();
 }
 
 // =============================================
@@ -1319,8 +1527,8 @@ async function loadRequests() {
   else if (currentReqTab === 'approved') query = query.in('status',['approved','disbursed']);
   else if (currentReqTab === 'reconciled') query = query.eq('status','reconciled');
 
-  // Dept heads only see their own
-  if (currentUser.role === 'department_head' || currentUser.role === 'womens_ministry_lead') {
+  // Dept heads and ministry leads only see their own
+  if ([...ALL_DEPT_ROLES].includes(currentUser.role)) {
     query = query.eq('requested_by', currentUser.id);
   }
 
@@ -1363,9 +1571,19 @@ function getRequestActions(r) {
 }
 
 function openNewRequest() {
-  const fundOptions = currentUser.role === 'womens_ministry_lead'
-    ? `<option value="womens_ministry">Women's Ministry Fund</option>`
-    : `<option value="operational">Operational Fund</option><option value="womens_ministry">Women's Ministry Fund</option>${['lead_pastor','finance_admin'].includes(currentUser.role)?'<option value="savings">Savings (exceptional only)</option>':''}`;
+  let fundOptions = '';
+  if (currentUser.role === 'womens_ministry_lead') {
+    fundOptions = `<option value="womens_ministry">Women's Ministry Fund</option>`;
+  } else if (currentUser.role === 'youth_ministry_lead') {
+    fundOptions = `<option value="youth_ministry">Youth Ministry Fund</option>`;
+  } else if (currentUser.role === 'children_ministry_lead') {
+    fundOptions = `<option value="children_ministry">Children's Ministry Fund</option>`;
+  } else {
+    fundOptions = `<option value="operational">Operational Fund</option>`;
+    if (['lead_pastor','finance_admin'].includes(currentUser.role)) {
+      fundOptions += `<option value="savings">Savings (exceptional only)</option>`;
+    }
+  }
   openModal('new-request', `
     <button class="modal-close" onclick="closeModal('new-request')">✕</button>
     <h3>New Fund Request</h3>
@@ -1677,14 +1895,17 @@ async function loadUsers() {
   const el = document.getElementById('users-table');
   if (!appData.users || !appData.users.length) { el.innerHTML = '<div class="loading">Loading...</div>'; return; }
   el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Department</th><th>Status</th><th>Action</th></tr></thead>
+    <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Department</th><th>Status</th><th>Actions</th></tr></thead>
     <tbody>${appData.users.map(u=>`<tr>
       <td><strong>${u.name}</strong></td>
       <td class="text-muted">${u.username}</td>
       <td>${ROLE_LABELS[u.role]||u.role}</td>
       <td>${u.department||'—'}</td>
       <td><span class="badge badge-${u.is_active?'active':'rejected'}">${u.is_active?'Active':'Inactive'}</span></td>
-      <td><button class="btn btn-sm btn-secondary" onclick="toggleUserStatus('${u.id}',${u.is_active})">${u.is_active?'Deactivate':'Activate'}</button></td>
+      <td style="white-space:nowrap;">
+        <button class="btn btn-sm btn-secondary" onclick="openChangePassword('${u.id}','${u.name.replace(/'/g,"\\'")}')">🔑 Password</button>
+        <button class="btn btn-sm btn-secondary" onclick="toggleUserStatus('${u.id}',${u.is_active})">${u.is_active?'Deactivate':'Activate'}</button>
+      </td>
     </tr>`).join('')}</tbody>
   </table></div>`;
 }
@@ -1695,15 +1916,17 @@ function openNewUser() {
     <h3>Add New User</h3>
     <div class="form-grid">
       <div class="form-group"><label>Full Name</label><input type="text" id="nu-name" placeholder="Full name"></div>
-      <div class="form-group"><label>Username</label><input type="text" id="nu-username" placeholder="Login username"></div>
+      <div class="form-group"><label>Username</label><input type="text" id="nu-username" placeholder="Login username (no spaces)"></div>
       <div class="form-group"><label>Password</label><input type="password" id="nu-password" placeholder="Set password"></div>
-      <div class="form-group"><label>Role</label><select id="nu-role">
+      <div class="form-group"><label>Role</label><select id="nu-role" onchange="toggleDeptField()">
         <option value="department_head">Department Head</option>
         <option value="womens_ministry_lead">Women's Ministry Lead</option>
+        <option value="youth_ministry_lead">Youth Ministry Lead</option>
+        <option value="children_ministry_lead">Children's Ministry Lead</option>
         <option value="finance_admin">Finance Admin</option>
         <option value="lead_pastor">Lead Pastor</option>
       </select></div>
-      <div class="form-group full"><label>Department</label><input type="text" id="nu-dept" placeholder="e.g. Worship, Youth, Admin..."></div>
+      <div class="form-group full"><label>Department</label><input type="text" id="nu-dept" placeholder="e.g. Music Ministry, Media Ministry, Prayer Team..."></div>
     </div>
     <div id="nu-msg"></div>
     <div class="modal-footer">
@@ -1711,6 +1934,40 @@ function openNewUser() {
       <button class="btn btn-primary" onclick="saveNewUser()">Add User</button>
     </div>
   `);
+}
+
+function toggleDeptField() {
+  const role = document.getElementById('nu-role')?.value;
+  const deptEl = document.getElementById('nu-dept');
+  if (deptEl) {
+    const ministriesWithDept = ['department_head','womens_ministry_lead','youth_ministry_lead','children_ministry_lead'];
+    deptEl.placeholder = ministriesWithDept.includes(role) ? 'Enter department/ministry name' : 'Optional';
+  }
+}
+
+function openChangePassword(userId, userName) {
+  openModal('change-pw', `
+    <button class="modal-close" onclick="closeModal('change-pw')">✕</button>
+    <h3>🔑 Change Password — ${userName}</h3>
+    <div class="form-group"><label>New Password</label><input type="password" id="cp-new" placeholder="Enter new password"></div>
+    <div class="form-group mt-8"><label>Confirm Password</label><input type="password" id="cp-confirm" placeholder="Repeat new password"></div>
+    <div id="cp-msg" class="mt-8"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('change-pw')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveNewPassword('${userId}')">Save Password</button>
+    </div>
+  `);
+}
+
+async function saveNewPassword(userId) {
+  const newPw = document.getElementById('cp-new').value;
+  const confirmPw = document.getElementById('cp-confirm').value;
+  if (!newPw || newPw.length < 6) { document.getElementById('cp-msg').innerHTML = '<div class="alert alert-error">Password must be at least 6 characters</div>'; return; }
+  if (newPw !== confirmPw) { document.getElementById('cp-msg').innerHTML = '<div class="alert alert-error">Passwords do not match</div>'; return; }
+  const { error } = await db.from('users').update({ password: newPw }).eq('id', userId);
+  if (error) { document.getElementById('cp-msg').innerHTML = `<div class="alert alert-error">${error.message}</div>`; return; }
+  document.getElementById('cp-msg').innerHTML = '<div class="alert alert-success">✓ Password updated successfully</div>';
+  setTimeout(() => closeModal('change-pw'), 1500);
 }
 
 async function saveNewUser() {
