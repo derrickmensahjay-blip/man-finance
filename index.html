@@ -1126,6 +1126,8 @@ async function loadCampaigns() {
       <div style="margin-top:12px;display:flex;gap:8px;">
         <button class="btn btn-sm btn-primary" onclick="openAddPledge('${c.id}','${c.name.replace(/'/g,"\\'")}')">+ Add Pledge</button>
         <button class="btn btn-sm btn-secondary" onclick="viewCampaignPledges('${c.id}','${c.name.replace(/'/g,"\\'")}')">View Pledges</button>
+        <button class="btn btn-sm btn-secondary" onclick="editCampaign('${c.id}','${c.name.replace(/'/g,"\\'")}','${(c.description||'').replace(/'/g,"\\'")}',${c.target_amount},'${c.start_date}','${c.end_date||''}','${c.status}')">✏ Edit</button>
+        <button class="btn btn-sm btn-danger" onclick="deleteCampaign('${c.id}')">🗑 Delete</button>
       </div>
     </div>`;
   }).join('');
@@ -1146,7 +1148,9 @@ async function loadAllPledges() {
       <td class="text-green">${fmt(p.fulfilled_amount)}</td>
       <td class="text-red">${fmt(parseFloat(p.pledged_amount)-parseFloat(p.fulfilled_amount))}</td>
       <td><span class="badge badge-${p.status}">${p.status}</span></td>
-      <td><button class="btn btn-sm btn-gold" onclick="recordPledgePayment('${p.id}','${p.pledger_name.replace(/'/g,"\\'")}',${p.pledged_amount},${p.fulfilled_amount})">Record Payment</button></td>
+      <td><button class="btn btn-sm btn-gold" onclick="recordPledgePayment('${p.id}','${p.pledger_name.replace(/'/g,"\\'")}',${p.pledged_amount},${p.fulfilled_amount})">Record Payment</button>
+      <button class="btn btn-sm btn-secondary" onclick="editPledge('${p.id}','${p.pledger_name.replace(/'/g,"\\'")}','${p.phone||''}',${p.pledged_amount})">✏</button>
+      <button class="btn btn-sm btn-danger" onclick="deletePledge('${p.id}')">🗑</button></td>
     </tr>`).join('')}</tbody>
   </table></div>`;
 }
@@ -1228,6 +1232,85 @@ async function saveCampaign() {
   if (error) { document.getElementById('c-msg').innerHTML = `<div class="alert alert-error">${error.message}</div>`; return; }
   closeModal('new-campaign');
   loadCampaigns();
+}
+
+function editCampaign(id, name, desc, target, start, end, status) {
+  openModal('edit-campaign', `
+    <button class="modal-close" onclick="closeModal('edit-campaign')">✕</button>
+    <h3>✏ Edit Campaign</h3>
+    <div class="form-grid">
+      <div class="form-group full"><label>Campaign Name</label><input type="text" id="ec-name" value="${name}"></div>
+      <div class="form-group full"><label>Description</label><textarea id="ec-desc">${desc}</textarea></div>
+      <div class="form-group"><label>Target Amount (GH₵)</label><input type="number" id="ec-target" value="${target}" min="0" step="0.01"></div>
+      <div class="form-group"><label>Start Date</label><input type="date" id="ec-start" value="${start}"></div>
+      <div class="form-group"><label>End Date</label><input type="date" id="ec-end" value="${end}"></div>
+      <div class="form-group"><label>Status</label><select id="ec-status">
+        <option value="active" ${status==='active'?'selected':''}>Active</option>
+        <option value="completed" ${status==='completed'?'selected':''}>Completed</option>
+        <option value="cancelled" ${status==='cancelled'?'selected':''}>Cancelled</option>
+      </select></div>
+    </div>
+    <div id="ec-msg"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('edit-campaign')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditCampaign('${id}')">Save Changes</button>
+    </div>
+  `);
+}
+
+async function saveEditCampaign(id) {
+  const name = document.getElementById('ec-name').value.trim();
+  const desc = document.getElementById('ec-desc').value.trim();
+  const target = parseFloat(document.getElementById('ec-target').value||0);
+  const start = document.getElementById('ec-start').value;
+  const end = document.getElementById('ec-end').value;
+  const status = document.getElementById('ec-status').value;
+  if (!name || target <= 0) { document.getElementById('ec-msg').innerHTML = '<div class="alert alert-error">Name and target required</div>'; return; }
+  const { error } = await db.from('campaigns').update({ name, description:desc, target_amount:target, start_date:start, end_date:end||null, status }).eq('id', id);
+  if (error) { document.getElementById('ec-msg').innerHTML = `<div class="alert alert-error">${error.message}</div>`; return; }
+  closeModal('edit-campaign'); loadCampaigns();
+}
+
+async function deleteCampaign(id) {
+  if (!confirm('Delete this campaign? All associated pledges will also be deleted.')) return;
+  await db.from('pledge_payments').delete().in('pledge_id', (await db.from('pledges').select('id').eq('campaign_id',id)).data?.map(p=>p.id)||[]);
+  await db.from('pledges').delete().eq('campaign_id', id);
+  await db.from('campaigns').delete().eq('id', id);
+  loadCampaigns();
+}
+
+function editPledge(id, name, phone, pledgedAmt) {
+  openModal('edit-pledge', `
+    <button class="modal-close" onclick="closeModal('edit-pledge')">✕</button>
+    <h3>✏ Edit Pledge</h3>
+    <div class="form-grid">
+      <div class="form-group"><label>Pledger Name</label><input type="text" id="ep-name" value="${name}"></div>
+      <div class="form-group"><label>Phone</label><input type="text" id="ep-phone" value="${phone}"></div>
+      <div class="form-group full"><label>Pledged Amount (GH₵)</label><input type="number" id="ep-amount" value="${pledgedAmt}" min="0" step="0.01"></div>
+    </div>
+    <div id="ep-msg"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('edit-pledge')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditPledge('${id}')">Save Changes</button>
+    </div>
+  `);
+}
+
+async function saveEditPledge(id) {
+  const name = document.getElementById('ep-name').value.trim();
+  const phone = document.getElementById('ep-phone').value.trim();
+  const amount = parseFloat(document.getElementById('ep-amount').value||0);
+  if (!name || amount <= 0) { document.getElementById('ep-msg').innerHTML = '<div class="alert alert-error">Name and amount required</div>'; return; }
+  const { error } = await db.from('pledges').update({ pledger_name:name, phone, pledged_amount:amount }).eq('id', id);
+  if (error) { document.getElementById('ep-msg').innerHTML = `<div class="alert alert-error">${error.message}</div>`; return; }
+  closeModal('edit-pledge'); loadAllPledges(); loadCampaigns();
+}
+
+async function deletePledge(id) {
+  if (!confirm('Delete this pledge record? All payments for this pledge will also be deleted.')) return;
+  await db.from('pledge_payments').delete().eq('pledge_id', id);
+  await db.from('pledges').delete().eq('id', id);
+  loadAllPledges(); loadCampaigns();
 }
 
 function recordPledgePayment(pledgeId, pledgerName, pledgedAmt, fulfilledAmt) {
@@ -1415,50 +1498,182 @@ async function deleteWelfareDisbursement(id, amount) {
 // =============================================
 function pageSavings() {
   return `
-    <div class="page-header"><h2>◈ Savings & Reserves</h2><p>Track the 60% church savings and authorised withdrawals</p></div>
+    <div class="page-header"><h2>◈ Savings & Reserves</h2><p>Track savings, withdrawals and fund transfers</p></div>
     <div id="savings-balance-card"></div>
-    <div class="card">
-      <div class="card-title">⚠ Withdraw from Savings</div>
-      <div class="alert alert-warning">Savings withdrawals should only be made for authorised church activities. All withdrawals are logged and visible to leadership.</div>
-      <div class="form-grid mt-8">
-        <div class="form-group"><label>Amount (GH₵)</label><input type="number" id="sw-amount" placeholder="0.00" min="0" step="0.01"></div>
-        <div class="form-group"><label>Withdrawal Date</label><input type="date" id="sw-date" value="${today()}"></div>
-        <div class="form-group full"><label>Reason / Purpose</label><textarea id="sw-reason" placeholder="Why are funds being withdrawn from savings?"></textarea></div>
-      </div>
-      <div class="btn-group mt-8">
-        <button class="btn btn-danger" onclick="saveSavingsWithdrawal()">⚠ Record Withdrawal</button>
-      </div>
-      <div id="sw-msg" class="mt-8"></div>
+    <div class="tabs">
+      <button class="tab active" onclick="switchSavingsTab('withdrawals')">Withdrawals</button>
+      <button class="tab" onclick="switchSavingsTab('transfers')">Fund Transfers</button>
     </div>
-    <div class="card">
-      <div class="card-title">Savings Withdrawal History</div>
-      <div id="savings-table"></div>
+    <div class="tab-panel active" id="tab-savings-withdrawals">
+      <div class="card">
+        <div class="card-title">⚠ Withdraw from Savings</div>
+        <div class="alert alert-warning">Savings withdrawals should only be made for authorised church activities. All withdrawals are logged and visible to leadership.</div>
+        <div class="form-grid mt-8">
+          <div class="form-group"><label>Amount (GH₵)</label><input type="number" id="sw-amount" placeholder="0.00" min="0" step="0.01"></div>
+          <div class="form-group"><label>Withdrawal Date</label><input type="date" id="sw-date" value="${today()}"></div>
+          <div class="form-group full"><label>Reason / Purpose</label><textarea id="sw-reason" placeholder="Why are funds being withdrawn from savings?"></textarea></div>
+        </div>
+        <div class="btn-group mt-8">
+          <button class="btn btn-danger" onclick="saveSavingsWithdrawal()">⚠ Record Withdrawal</button>
+        </div>
+        <div id="sw-msg" class="mt-8"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Savings Withdrawal History</div>
+        <div id="savings-table"></div>
+      </div>
+    </div>
+    <div class="tab-panel" id="tab-savings-transfers">
+      <div class="card">
+        <div class="card-title">⇄ Transfer Between Funds</div>
+        <div class="alert alert-info">Move funds from one pot to another. All transfers are fully documented and logged in the audit trail.</div>
+        <div class="form-grid mt-8">
+          <div class="form-group">
+            <label>From Fund</label>
+            <select id="tr-from" onchange="updateTransferBalance()">
+              <option value="operational">Operational Fund</option>
+              <option value="savings">Church Savings</option>
+              <option value="tithe">Tithe Fund</option>
+              <option value="womens_ministry">Women's Ministry Fund</option>
+              <option value="youth_ministry">Youth Ministry Fund</option>
+              <option value="children_ministry">Children's Ministry Fund</option>
+              <option value="welfare">Welfare Fund</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>To Fund</label>
+            <select id="tr-to">
+              <option value="savings">Church Savings</option>
+              <option value="operational">Operational Fund</option>
+              <option value="tithe">Tithe Fund</option>
+              <option value="womens_ministry">Women's Ministry Fund</option>
+              <option value="youth_ministry">Youth Ministry Fund</option>
+              <option value="children_ministry">Children's Ministry Fund</option>
+              <option value="welfare">Welfare Fund</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Amount (GH₵)</label>
+            <input type="number" id="tr-amount" placeholder="0.00" min="0" step="0.01">
+          </div>
+          <div class="form-group">
+            <label>Transfer Date</label>
+            <input type="date" id="tr-date" value="${today()}">
+          </div>
+          <div class="form-group full">
+            <label>Reason / Documentation</label>
+            <textarea id="tr-reason" placeholder="Why are these funds being transferred? Provide clear justification..."></textarea>
+          </div>
+        </div>
+        <div id="tr-balance-info" class="alert alert-info mt-8" style="display:none;"></div>
+        <div class="btn-group mt-8">
+          <button class="btn btn-gold" onclick="saveFundTransfer()">⇄ Execute Transfer</button>
+        </div>
+        <div id="tr-msg" class="mt-8"></div>
+      </div>
+      <div class="card">
+        <div class="card-title">Transfer History</div>
+        <div id="transfers-table"></div>
+      </div>
     </div>
   `;
 }
 
+function switchSavingsTab(tab) {
+  document.querySelectorAll('#page-savings .tab').forEach((t,i) => {
+    t.classList.toggle('active', (i===0 && tab==='withdrawals') || (i===1 && tab==='transfers'));
+  });
+  document.querySelectorAll('#page-savings .tab-panel').forEach(p => p.classList.remove('active'));
+  const panel = document.getElementById('tab-savings-' + tab);
+  if (panel) panel.classList.add('active');
+  if (tab === 'transfers') loadTransferHistory();
+}
+
 async function loadSavings() {
-  const pot = appData.pots['savings'];
+  const pots = appData.pots;
   const { data: withdrawals } = await db.from('savings_withdrawals').select('*').order('withdrawal_date',{ascending:false});
   const totalWithdrawn = (withdrawals||[]).reduce((s,w)=>s+parseFloat(w.amount||0),0);
   document.getElementById('savings-balance-card').innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:20px;">
-      <div class="pot-card"><div class="pot-name">◈ Current Savings Balance</div><div class="pot-balance text-green">${fmt(pot?.balance||0)}</div><div class="pot-sub">Available in savings</div></div>
-      <div class="pot-card red"><div class="pot-name">↓ Total Withdrawn</div><div class="pot-balance text-red">${fmt(totalWithdrawn)}</div><div class="pot-sub">Eaten into savings</div></div>
-      <div class="pot-card gold"><div class="pot-name">📋 Withdrawals Recorded</div><div class="pot-balance">${(withdrawals||[]).length}</div><div class="pot-sub">All time</div></div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:20px;">
+      <div class="pot-card"><div class="pot-name">◈ Church Savings</div><div class="pot-balance text-green">${fmt(pots['savings']?.balance||0)}</div></div>
+      <div class="pot-card blue"><div class="pot-name">⚙ Operational</div><div class="pot-balance" style="color:var(--blue)">${fmt(pots['operational']?.balance||0)}</div></div>
+      <div class="pot-card gold"><div class="pot-name">✝ Tithe Fund</div><div class="pot-balance text-gold">${fmt(pots['tithe']?.balance||0)}</div></div>
+      <div class="pot-card red"><div class="pot-name">♥ Welfare</div><div class="pot-balance text-red">${fmt(pots['welfare']?.balance||0)}</div></div>
+      <div class="pot-card purple"><div class="pot-name">♀ Women's Min.</div><div class="pot-balance" style="color:#7b1fa2">${fmt(pots['womens_ministry']?.balance||0)}</div></div>
+      <div class="pot-card purple"><div class="pot-name">★ Youth Min.</div><div class="pot-balance" style="color:#7b1fa2">${fmt(pots['youth_ministry']?.balance||0)}</div></div>
+      <div class="pot-card purple"><div class="pot-name">♦ Children's Min.</div><div class="pot-balance" style="color:#7b1fa2">${fmt(pots['children_ministry']?.balance||0)}</div></div>
+      <div class="pot-card red"><div class="pot-name">↓ Total Withdrawn</div><div class="pot-balance text-red">${fmt(totalWithdrawn)}</div></div>
     </div>`;
   const el = document.getElementById('savings-table');
   if (!withdrawals || !withdrawals.length) { el.innerHTML = '<div class="empty-state"><p>No withdrawals yet</p></div>'; return; }
   const canEdit = ['finance_admin','lead_pastor'].includes(currentUser.role);
   el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Date</th><th>Amount</th><th>Reason</th><th>Notes</th><th>By</th>${canEdit?'<th>Actions</th>':''}</tr></thead>
+    <thead><tr><th>Date</th><th>Amount</th><th>Reason</th><th>By</th>${canEdit?'<th>Actions</th>':''}</tr></thead>
     <tbody>${withdrawals.map(w=>`<tr>
       <td>${fmtDate(w.withdrawal_date)}</td>
       <td class="text-red font-bold">${fmt(w.amount)}</td>
       <td>${w.reason}</td>
-      <td class="text-muted">${w.notes||'—'}</td>
       <td class="text-muted">${w.approved_by||'—'}</td>
       ${canEdit ? `<td><button class="btn btn-sm btn-danger" onclick="deleteSavingsWithdrawal('${w.id}',${w.amount})">🗑 Delete</button></td>` : ''}
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+function updateTransferBalance() {
+  const from = document.getElementById('tr-from')?.value;
+  if (!from) return;
+  const bal = parseFloat(appData.pots[from]?.balance||0);
+  const info = document.getElementById('tr-balance-info');
+  if (info) { info.style.display='block'; info.textContent = `Available in ${from.replace(/_/g,' ')}: ${fmt(bal)}`; }
+}
+
+async function saveFundTransfer() {
+  const from = document.getElementById('tr-from').value;
+  const to = document.getElementById('tr-to').value;
+  const amount = parseFloat(document.getElementById('tr-amount').value||0);
+  const date = document.getElementById('tr-date').value;
+  const reason = document.getElementById('tr-reason').value.trim();
+  const msg = document.getElementById('tr-msg');
+
+  if (from === to) { msg.innerHTML = '<div class="alert alert-error">From and To funds cannot be the same</div>'; return; }
+  if (amount <= 0 || !date || !reason) { msg.innerHTML = '<div class="alert alert-error">All fields are required</div>'; return; }
+  await loadGlobalData();
+  const balance = parseFloat(appData.pots[from]?.balance||0);
+  if (amount > balance) { msg.innerHTML = `<div class="alert alert-error">Insufficient funds in ${from.replace(/_/g,' ')}. Available: ${fmt(balance)}</div>`; return; }
+
+  const { error } = await db.from('fund_transfers').insert({
+    from_fund: from, to_fund: to, amount, transfer_date: date,
+    reason, transferred_by: currentUser.id
+  });
+  if (error) { msg.innerHTML = `<div class="alert alert-error">${error.message}</div>`; return; }
+
+  await decrementPot(from, amount);
+  await loadGlobalData();
+  await incrementPot(to, amount);
+  await logAudit('FUND_TRANSFER', 'fund_transfers', null, { from, to, amount, reason, date });
+
+  msg.innerHTML = `<div class="alert alert-success">✓ Transfer of ${fmt(amount)} from <strong>${from.replace(/_/g,' ')}</strong> to <strong>${to.replace(/_/g,' ')}</strong> completed and documented</div>`;
+  document.getElementById('tr-amount').value = '';
+  document.getElementById('tr-reason').value = '';
+  await loadGlobalData();
+  loadSavings();
+  loadTransferHistory();
+}
+
+async function loadTransferHistory() {
+  const { data } = await db.from('fund_transfers').select('*, by_user:users!fund_transfers_transferred_by_fkey(name)').order('transfer_date',{ascending:false});
+  const el = document.getElementById('transfers-table');
+  if (!el) return;
+  if (!data || !data.length) { el.innerHTML = '<div class="empty-state"><p>No transfers recorded yet</p></div>'; return; }
+  el.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Date</th><th>From</th><th>To</th><th>Amount</th><th>Reason</th><th>By</th></tr></thead>
+    <tbody>${data.map(t=>`<tr>
+      <td>${fmtDate(t.transfer_date)}</td>
+      <td><span style="background:#fff3cd;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;">${t.from_fund.replace(/_/g,' ')}</span></td>
+      <td><span style="background:#d1e7dd;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600;">${t.to_fund.replace(/_/g,' ')}</span></td>
+      <td class="font-bold text-green">${fmt(t.amount)}</td>
+      <td>${t.reason}</td>
+      <td class="text-muted">${t.by_user?.name||'—'}</td>
     </tr>`).join('')}</tbody>
   </table></div>`;
 }
