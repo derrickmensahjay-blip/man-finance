@@ -8,11 +8,11 @@
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
   /* NOTIFICATION BELL */
-  .notif-bell { position: relative; cursor: pointer; padding: 6px 10px; color: rgba(255,255,255,0.7); font-size: 18px; }
-  .notif-bell:hover { color: white; }
-  .notif-badge { position: absolute; top: 2px; right: 4px; background: var(--red); color: white; border-radius: 50%; width: 16px; height: 16px; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-  .notif-dropdown { position: absolute; right: 0; top: 100%; width: 320px; background: white; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,0.15); z-index: 999; overflow: hidden; }
-  .notif-header { padding: 12px 16px; background: var(--green); color: white; font-size: 13px; font-weight: 700; }
+  .notif-bell { position: relative; cursor: pointer; padding: 4px 8px; color: rgba(255,255,255,0.8); font-size: 18px; border-radius: 6px; }
+  .notif-bell:hover { color: white; background: rgba(255,255,255,0.1); }
+  .notif-badge { position: absolute; top: 0px; right: 2px; background: var(--red); color: white; border-radius: 50%; width: 15px; height: 15px; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .notif-dropdown { position: fixed; left: 245px; top: 10px; width: 300px; background: white; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,0.2); z-index: 9999; overflow: hidden; max-height: 400px; overflow-y: auto; }
+  .notif-header { padding: 12px 16px; background: var(--green); color: white; font-size: 13px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
   .notif-item { padding: 12px 16px; border-bottom: 1px solid #f0f0f0; font-size: 12px; cursor: pointer; }
   .notif-item:hover { background: #f9f9f9; }
   .notif-item.unread { background: #f0f9f4; border-left: 3px solid var(--green); }
@@ -253,16 +253,11 @@
   <!-- SIDEBAR -->
   <div class="sidebar">
     <div class="sidebar-header">
-      <div class="church-name">✝ MIGHTY ARMY NETWORK</div>
-      <div class="system-name">Finance & Admin System</div>
-    </div>
-    <div class="sidebar-user">
-      <div class="u-name" id="sb-name">—</div>
-      <div class="u-role" id="sb-role">—</div>
-    </div>
-    <nav class="sidebar-nav" id="sidebar-nav"></nav>
-    <div class="sidebar-footer">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div class="church-name">✝ MIGHTY ARMY NETWORK</div>
+          <div class="system-name">Finance & Admin System</div>
+        </div>
         <div style="position:relative;" id="notif-container">
           <div class="notif-bell" onclick="toggleNotifications()" title="Notifications">🔔<span class="notif-badge hidden" id="notif-count">0</span></div>
           <div class="notif-dropdown hidden" id="notif-dropdown">
@@ -271,6 +266,13 @@
           </div>
         </div>
       </div>
+    </div>
+    <div class="sidebar-user">
+      <div class="u-name" id="sb-name">—</div>
+      <div class="u-role" id="sb-role">—</div>
+    </div>
+    <nav class="sidebar-nav" id="sidebar-nav"></nav>
+    <div class="sidebar-footer">
       <button class="btn-logout" onclick="doLogout()">⇠ Sign Out</button>
     </div>
   </div>
@@ -295,13 +297,18 @@ const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 const EMAILJS_SERVICE_ID = 'service_v2u82kl';
 const EMAILJS_TEMPLATE_ID = 'template_kgx2d7k';
 const EMAILJS_PUBLIC_KEY = 'dEAfdQpgI18EN9XSP';
+emailjs.init(EMAILJS_PUBLIC_KEY);
 
 async function sendNotificationEmail(toEmail, toName, subject, message) {
   if (!toEmail) return;
   try {
     await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-      to_email: toEmail, to_name: toName, subject, message
-    }, EMAILJS_PUBLIC_KEY);
+      to_email: toEmail,
+      to_name: toName || 'Team Member',
+      subject: subject,
+      message: message,
+      name: 'MAN Finance System'
+    });
   } catch(e) { console.warn('Email notification failed:', e); }
 }
 
@@ -392,7 +399,8 @@ const NAV_CONFIG = [
     { id: 'savings', label: 'Savings & Reserves', icon: '◈', roles: ['finance_admin','lead_pastor'] },
   ]},
   { section: 'Requests', items: [
-    { id: 'requests', label: 'Fund Requests', icon: '⇌', roles: ['lead_pastor','finance_admin','department_head','womens_ministry_lead','youth_ministry_lead','children_ministry_lead'] }
+    { id: 'requests', label: 'Fund Requests', icon: '⇌', roles: ['lead_pastor','finance_admin','department_head','womens_ministry_lead','youth_ministry_lead','children_ministry_lead'] },
+    { id: 'budgets', label: 'Budget Submissions', icon: '📊', roles: ['department_head','womens_ministry_lead','youth_ministry_lead','children_ministry_lead'] }
   ]},
   { section: 'Reports', items: [
     { id: 'budgets', label: 'Budget Reviews', icon: '📊', roles: ['lead_pastor','finance_admin'] },
@@ -450,17 +458,18 @@ async function initApp() {
 
 // Recalculate all pot balances from actual records (fixes drift)
 async function recalculatePotBalances() {
-  const [{ data: income }, { data: welfare_d }, { data: sw }, { data: transfers }, { data: requests }] = await Promise.all([
+  const [{ data: income }, { data: welfare_d }, { data: sw }, { data: transfers }, { data: requests }, { data: pledgePayments }] = await Promise.all([
     db.from('income_records').select('*'),
     db.from('welfare_disbursements').select('amount'),
     db.from('savings_withdrawals').select('amount'),
     db.from('fund_transfers').select('from_fund,to_fund,amount'),
-    db.from('fund_requests').select('fund_source,amount_requested,amount_returned,status')
+    db.from('fund_requests').select('fund_source,amount_requested,amount_returned,status'),
+    db.from('pledge_payments').select('amount')
   ]);
 
   const pots = { tithe:0, savings:0, operational:0, womens_ministry:0, youth_ministry:0, children_ministry:0, welfare:0 };
 
-  // Add all income
+  // Add all income from offerings
   (income||[]).forEach(r => {
     pots.tithe += parseFloat(r.tithe_amount||0);
     pots.savings += parseFloat(r.savings_amount||0);
@@ -471,37 +480,42 @@ async function recalculatePotBalances() {
     pots.welfare += parseFloat(r.welfare_amount||0);
   });
 
+  // Add pledge payments to operational
+  (pledgePayments||[]).forEach(p => { pots.operational += parseFloat(p.amount||0); });
+
   // Subtract welfare disbursements
   (welfare_d||[]).forEach(d => { pots.welfare -= parseFloat(d.amount||0); });
 
   // Subtract savings withdrawals
   (sw||[]).forEach(w => { pots.savings -= parseFloat(w.amount||0); });
 
-  // Apply transfers
+  // Apply transfers (from pot loses, to pot gains)
   (transfers||[]).forEach(t => {
     if (pots[t.from_fund] !== undefined) pots[t.from_fund] -= parseFloat(t.amount||0);
     if (pots[t.to_fund] !== undefined) pots[t.to_fund] += parseFloat(t.amount||0);
   });
 
-  // Subtract disbursed fund requests, add back returned amounts
+  // Subtract disbursed/reconciled fund requests from their source pot
+  // Add back only the returned amount on reconciled requests
   (requests||[]).forEach(r => {
     if (['disbursed','reconciled'].includes(r.status)) {
-      if (pots[r.fund_source] !== undefined) pots[r.fund_source] -= parseFloat(r.amount_requested||0);
+      if (pots[r.fund_source] !== undefined) {
+        pots[r.fund_source] -= parseFloat(r.amount_requested||0);
+      }
     }
-    if (r.status === 'reconciled' && r.amount_returned > 0) {
-      if (pots[r.fund_source] !== undefined) pots[r.fund_source] += parseFloat(r.amount_returned||0);
+    if (r.status === 'reconciled' && parseFloat(r.amount_returned||0) > 0) {
+      if (pots[r.fund_source] !== undefined) {
+        pots[r.fund_source] += parseFloat(r.amount_returned||0);
+      }
     }
   });
 
-  // Add pledge fulfillments to operational
-  const { data: pledgePayments } = await db.from('pledge_payments').select('amount');
-  (pledgePayments||[]).forEach(p => { pots.operational += parseFloat(p.amount||0); });
-
-  // Update all pots
+  // Update all pots, floor at 0
   await Promise.all(Object.entries(pots).map(([name, balance]) =>
-    db.from('fund_pots').update({ balance: Math.max(0, balance), updated_at: new Date().toISOString() }).eq('name', name)
+    db.from('fund_pots').update({ balance: Math.max(0, Math.round(balance * 100) / 100), updated_at: new Date().toISOString() }).eq('name', name)
   ));
 
+  // Reload global data after updating
   await loadGlobalData();
 }
 
@@ -1944,6 +1958,7 @@ function getRequestActions(r) {
   }
   if (r.status === 'rejected' && r.requested_by === currentUser.id) {
     btns.push(`<button class="btn btn-sm btn-gold" onclick="editAndResubmit('${r.id}')">✏ Edit & Resubmit</button>`);
+    btns.push(`<button class="btn btn-sm btn-danger" onclick="deleteFundRequest('${r.id}')">🗑 Delete</button>`);
   }
   if (r.status === 'approved' && ['lead_pastor','finance_admin'].includes(currentUser.role)) {
     btns.push(`<button class="btn btn-sm btn-gold" onclick="disburseRequest('${r.id}',${r.amount_requested},'${r.fund_source}')">💸 Disburse</button>`);
@@ -2263,6 +2278,10 @@ function switchBudgetTab(tab) {
 async function loadBudgets() {
   let query = db.from('dept_budgets').select('*, submitted_by_user:users!dept_budgets_submitted_by_fkey(name,department)').order('year',{ascending:false}).order('quarter',{ascending:false});
   if (currentBudgetTab !== 'all') query = query.eq('status', currentBudgetTab);
+  // Dept heads only see their own department
+  if (ALL_DEPT_ROLES.includes(currentUser.role)) {
+    query = query.eq('department', currentUser.department||'');
+  }
   const { data } = await query;
   const el = document.getElementById('budgets-table');
   if (!el) return;
@@ -2279,9 +2298,11 @@ async function loadBudgets() {
       <td>${fmtDate(b.created_at)}</td>
       <td style="white-space:nowrap;">
         <button class="btn btn-sm btn-secondary" onclick="viewBudget('${b.id}')">View</button>
-        ${b.status==='pending' ? `
+        ${b.status==='pending' && ['lead_pastor','finance_admin'].includes(currentUser.role) ? `
         <button class="btn btn-sm btn-primary" onclick="reviewBudget('${b.id}','approved')">✓ Approve</button>
         <button class="btn btn-sm btn-danger" onclick="reviewBudget('${b.id}','rejected')">✗ Reject</button>` : ''}
+        ${b.status==='rejected' && b.submitted_by===currentUser.id ? `
+        <button class="btn btn-sm btn-gold" onclick="editResubmitBudget('${b.id}')">✏ Edit & Resubmit</button>` : ''}
       </td>
     </tr>`).join('')}</tbody>
   </table></div>`;
@@ -2332,6 +2353,58 @@ async function submitBudgetReview(id, action) {
     await notifyUser(u.id, `Budget ${action==='approved'?'Approved':'Rejected'}`, msg, 'budget', u.email, u.name);
   }
   closeModal('review-budget');
+  loadBudgets();
+}
+
+function editResubmitBudget(id) {
+  openModal('edit-budget', `
+    <button class="modal-close" onclick="closeModal('edit-budget')">✕</button>
+    <h3>✏ Edit & Resubmit Budget</h3>
+    <div id="edit-budget-form"><div class="loading">Loading...</div></div>
+  `);
+  loadEditBudgetForm(id);
+}
+
+async function loadEditBudgetForm(id) {
+  const { data: b } = await db.from('dept_budgets').select('*').eq('id',id).single();
+  if (!b) return;
+  document.getElementById('edit-budget-form').innerHTML = `
+    <div class="alert alert-error" style="margin-bottom:12px;"><strong>Rejection reason:</strong> ${b.review_notes||'No reason given'}</div>
+    <div class="form-grid">
+      <div class="form-group"><label>Year</label><input type="number" id="eb-year" value="${b.year}" min="2024" max="2030"></div>
+      <div class="form-group"><label>Quarter</label><select id="eb-quarter">
+        <option value="Q1" ${b.quarter==='Q1'?'selected':''}>Q1 (Jan–Mar)</option>
+        <option value="Q2" ${b.quarter==='Q2'?'selected':''}>Q2 (Apr–Jun)</option>
+        <option value="Q3" ${b.quarter==='Q3'?'selected':''}>Q3 (Jul–Sep)</option>
+        <option value="Q4" ${b.quarter==='Q4'?'selected':''}>Q4 (Oct–Dec)</option>
+      </select></div>
+      <div class="form-group full"><label>Total Budget Estimate (GH₵)</label><input type="number" id="eb-amount" value="${b.total_amount}" min="0" step="0.01"></div>
+      <div class="form-group full"><label>Budget Breakdown / Notes</label><textarea id="eb-notes">${b.notes||''}</textarea></div>
+    </div>
+    <div id="eb-msg"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('edit-budget')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditBudget('${id}')">Resubmit Budget</button>
+    </div>
+  `;
+}
+
+async function saveEditBudget(id) {
+  const year = document.getElementById('eb-year').value;
+  const quarter = document.getElementById('eb-quarter').value;
+  const amount = parseFloat(document.getElementById('eb-amount').value||0);
+  const notes = document.getElementById('eb-notes').value;
+  if (!year || amount <= 0) { document.getElementById('eb-msg').innerHTML = '<div class="alert alert-error">Year and amount required</div>'; return; }
+  await db.from('dept_budgets').update({
+    year: parseInt(year), quarter, total_amount: amount, notes,
+    status: 'pending', reviewed_by: null, review_notes: null, reviewed_at: null
+  }).eq('id', id);
+  // Notify admins
+  const { data: admins } = await db.from('users').select('id,name,email').in('role',['finance_admin','lead_pastor']).eq('is_active',true);
+  for (const admin of admins||[]) {
+    await notifyUser(admin.id,'Budget Resubmitted',`${currentUser.name} has edited and resubmitted a ${quarter} ${year} budget estimate for ${currentUser.department}.`,'budget', admin.email, admin.name);
+  }
+  closeModal('edit-budget');
   loadBudgets();
 }
 
