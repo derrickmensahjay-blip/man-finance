@@ -302,14 +302,23 @@ emailjs.init(EMAILJS_PUBLIC_KEY);
 async function sendNotificationEmail(toEmail, toName, subject, message) {
   if (!toEmail) return;
   try {
-    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+    const result = await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
       to_email: toEmail,
       to_name: toName || 'Team Member',
       subject: subject,
       message: message,
-      name: 'MAN Finance System'
+      name: 'MAN Finance System',
+      reply_to: 'noreply@mightarmynetwork.org'
     });
-  } catch(e) { console.warn('Email notification failed:', e); }
+    console.log('Email sent to', toEmail, result.status);
+  } catch(e) { console.warn('Email notification failed to', toEmail, e.text || e); }
+}
+
+// Send to multiple recipients
+async function sendEmailToMany(recipients, subject, message) {
+  for (const r of recipients) {
+    if (r.email) await sendNotificationEmail(r.email, r.name, subject, message);
+  }
 }
 
 async function createNotification(userId, title, message, type) {
@@ -456,10 +465,10 @@ async function initApp() {
   }
 }
 
-// Recalculate all pot balances from actual records (fixes drift)
+// Recalculate all pot balances from actual records
 async function recalculatePotBalances() {
   const [{ data: income }, { data: welfare_d }, { data: sw }, { data: transfers }, { data: requests }, { data: pledgePayments }] = await Promise.all([
-    db.from('income_records').select('*'),
+    db.from('income_records').select('tithe_amount,savings_amount,operational_amount,womens_ministry_amount,youth_ministry_amount,children_ministry_amount,welfare_amount'),
     db.from('welfare_disbursements').select('amount'),
     db.from('savings_withdrawals').select('amount'),
     db.from('fund_transfers').select('from_fund,to_fund,amount'),
@@ -469,7 +478,7 @@ async function recalculatePotBalances() {
 
   const pots = { tithe:0, savings:0, operational:0, womens_ministry:0, youth_ministry:0, children_ministry:0, welfare:0 };
 
-  // Add all income from offerings
+  // Sum directly from stored column values — don't recalculate, trust what's in the DB
   (income||[]).forEach(r => {
     pots.tithe += parseFloat(r.tithe_amount||0);
     pots.savings += parseFloat(r.savings_amount||0);
@@ -489,33 +498,27 @@ async function recalculatePotBalances() {
   // Subtract savings withdrawals
   (sw||[]).forEach(w => { pots.savings -= parseFloat(w.amount||0); });
 
-  // Apply transfers (from pot loses, to pot gains)
+  // Apply transfers
   (transfers||[]).forEach(t => {
     if (pots[t.from_fund] !== undefined) pots[t.from_fund] -= parseFloat(t.amount||0);
     if (pots[t.to_fund] !== undefined) pots[t.to_fund] += parseFloat(t.amount||0);
   });
 
-  // Subtract disbursed/reconciled fund requests from their source pot
-  // Add back only the returned amount on reconciled requests
+  // Subtract disbursed/reconciled requests, add back returned amounts
   (requests||[]).forEach(r => {
     if (['disbursed','reconciled'].includes(r.status)) {
-      if (pots[r.fund_source] !== undefined) {
-        pots[r.fund_source] -= parseFloat(r.amount_requested||0);
-      }
+      if (pots[r.fund_source] !== undefined) pots[r.fund_source] -= parseFloat(r.amount_requested||0);
     }
     if (r.status === 'reconciled' && parseFloat(r.amount_returned||0) > 0) {
-      if (pots[r.fund_source] !== undefined) {
-        pots[r.fund_source] += parseFloat(r.amount_returned||0);
-      }
+      if (pots[r.fund_source] !== undefined) pots[r.fund_source] += parseFloat(r.amount_returned||0);
     }
   });
 
-  // Update all pots, floor at 0
+  // Update all pots
   await Promise.all(Object.entries(pots).map(([name, balance]) =>
     db.from('fund_pots').update({ balance: Math.max(0, Math.round(balance * 100) / 100), updated_at: new Date().toISOString() }).eq('name', name)
   ));
 
-  // Reload global data after updating
   await loadGlobalData();
 }
 
@@ -634,8 +637,8 @@ async function recalcAndRefresh() {
 }
 
 async function loadDashboard() {
-  // Auto recalculate on every dashboard load for accuracy
-  await recalculatePotBalances();
+  // Load global data fresh without auto-recalculating (recalc only on manual Sync)
+  await loadGlobalData();
   // Ministry leads with own funds get mini dashboard
   if (MINISTRY_OFFERING_ROLES.includes(currentUser.role)) {
     loadMinistryDashboard();
@@ -2031,10 +2034,11 @@ async function saveRequest() {
   if (error) { document.getElementById('rq-msg').innerHTML = `<div class="alert alert-error">${error.message}</div>`; return; }
   await logAudit('FUND_REQUEST_SUBMITTED', 'fund_requests', null, { dept, amount, purpose });
 
-  // Notify finance admins and lead pastor
+  // Notify all admins — lead pastor, finance admin
   const { data: admins } = await db.from('users').select('id,name,email').in('role',['finance_admin','lead_pastor']).eq('is_active',true);
+  const msg = `New fund request from ${currentUser.name} (${dept}):\n\nPurpose: ${purpose}\nAmount: ${fmt(amount)}\nFund: ${fund.replace(/_/g,' ')}\n\nPlease log in to review and approve.`;
   for (const admin of admins||[]) {
-    await notifyUser(admin.id, 'New Fund Request', `${currentUser.name} (${dept}) submitted a fund request for ${fmt(amount)} — "${purpose}"`, 'fund_request', admin.email, admin.name);
+    await notifyUser(admin.id, 'New Fund Request Submitted', msg, 'fund_request', admin.email, admin.name);
   }
   closeModal('new-request');
   loadRequests();
@@ -2132,10 +2136,10 @@ async function submitReview(reqId, action) {
   // Notify requester
   if (req?.requested_by_user) {
     const u = req.requested_by_user;
-    const msg = action === 'approve'
-      ? `Your fund request "${req.purpose}" for ${fmt(req.amount_requested)} has been APPROVED. Funds will be disbursed shortly.`
-      : `Your fund request "${req.purpose}" for ${fmt(req.amount_requested)} has been REJECTED. Reason: ${notes||'No reason given'}. You can edit and resubmit from the Fund Requests page.`;
-    await notifyUser(u.id, `Fund Request ${action==='approve'?'Approved':'Rejected'}`, msg, 'fund_request', u.email, u.name);
+    const emailMsg = action === 'approve'
+      ? `Dear ${u.name},\n\nYour fund request has been APPROVED.\n\nRequest: ${req.purpose}\nAmount: ${fmt(req.amount_requested)}\nRef: ${req.request_number}\n\nFunds will be disbursed to you shortly. Please log in to track the status.`
+      : `Dear ${u.name},\n\nYour fund request has been REJECTED.\n\nRequest: ${req.purpose}\nAmount: ${fmt(req.amount_requested)}\nRef: ${req.request_number}\nReason: ${notes||'No reason given'}\n\nYou may edit and resubmit your request from the Fund Requests page.`;
+    await notifyUser(u.id, `Fund Request ${action==='approve'?'Approved ✓':'Rejected ✗'}`, emailMsg, 'fund_request', u.email, u.name);
   }
   closeModal('review-req');
   loadRequests();
