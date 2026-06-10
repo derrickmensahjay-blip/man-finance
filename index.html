@@ -8,11 +8,11 @@
 <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
 <style>
   /* NOTIFICATION BELL */
-  .notif-bell { position: relative; cursor: pointer; padding: 4px 8px; color: rgba(255,255,255,0.8); font-size: 18px; border-radius: 6px; }
+  .notif-bell { position: relative; cursor: pointer; padding: 4px 8px; color: rgba(255,255,255,0.8); font-size: 18px; border-radius: 6px; display:inline-block; }
   .notif-bell:hover { color: white; background: rgba(255,255,255,0.1); }
   .notif-badge { position: absolute; top: 0px; right: 2px; background: var(--red); color: white; border-radius: 50%; width: 15px; height: 15px; font-size: 9px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
-  .notif-dropdown { position: fixed; left: 245px; top: 10px; width: 300px; background: white; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,0.2); z-index: 9999; overflow: hidden; max-height: 400px; overflow-y: auto; }
-  .notif-header { padding: 12px 16px; background: var(--green); color: white; font-size: 13px; font-weight: 700; display: flex; justify-content: space-between; align-items: center; }
+  .notif-dropdown { position: fixed; left: 10px; top: 60px; width: 300px; background: white; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,0.25); z-index: 9999; overflow: hidden; max-height: 400px; overflow-y: auto; border: 1px solid #e0e0e0; }
+  .notif-header { padding: 12px 16px; background: var(--green); color: white; font-size: 13px; font-weight: 700; position: sticky; top: 0; }
   .notif-item { padding: 12px 16px; border-bottom: 1px solid #f0f0f0; font-size: 12px; cursor: pointer; }
   .notif-item:hover { background: #f9f9f9; }
   .notif-item.unread { background: #f0f9f4; border-left: 3px solid var(--green); }
@@ -523,7 +523,7 @@ async function loadGlobalData() {
   const [{ data: pots }, { data: settings }, { data: users }] = await Promise.all([
     db.from('fund_pots').select('*'),
     db.from('settings').select('*'),
-    db.from('users').select('id, name, username, role, department, is_active')
+    db.from('users').select('id, name, username, role, department, is_active, email')
   ]);
   if (pots) pots.forEach(p => appData.pots[p.name] = p);
   if (settings) settings.forEach(s => appData.settings[s.key] = s.value);
@@ -2568,14 +2568,16 @@ async function loadUsers() {
   const el = document.getElementById('users-table');
   if (!appData.users || !appData.users.length) { el.innerHTML = '<div class="loading">Loading...</div>'; return; }
   el.innerHTML = `<div class="table-wrap"><table>
-    <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Department</th><th>Status</th><th>Actions</th></tr></thead>
+    <thead><tr><th>Name</th><th>Username</th><th>Role</th><th>Department</th><th>Email</th><th>Status</th><th>Actions</th></tr></thead>
     <tbody>${appData.users.map(u=>`<tr>
       <td><strong>${u.name}</strong></td>
       <td class="text-muted">${u.username}</td>
       <td>${ROLE_LABELS[u.role]||u.role}</td>
       <td>${u.department||'—'}</td>
+      <td class="text-muted" style="font-size:12px;">${u.email||'<span style="color:#c0392b;">Not set</span>'}</td>
       <td><span class="badge badge-${u.is_active?'active':'rejected'}">${u.is_active?'Active':'Inactive'}</span></td>
       <td style="white-space:nowrap;">
+        <button class="btn btn-sm btn-secondary" onclick="openEditUser('${u.id}','${u.name.replace(/'/g,"\\'")}','${u.email||''}')">✏ Edit</button>
         <button class="btn btn-sm btn-secondary" onclick="openChangePassword('${u.id}','${u.name.replace(/'/g,"\\'")}')">🔑 Password</button>
         <button class="btn btn-sm btn-secondary" onclick="toggleUserStatus('${u.id}',${u.is_active})">${u.is_active?'Deactivate':'Activate'}</button>
       </td>
@@ -2616,6 +2618,31 @@ function toggleDeptField() {
     const ministriesWithDept = ['department_head','womens_ministry_lead','youth_ministry_lead','children_ministry_lead'];
     deptEl.placeholder = ministriesWithDept.includes(role) ? 'Enter department/ministry name' : 'Optional';
   }
+}
+
+function openEditUser(userId, userName, userEmail) {
+  openModal('edit-user', `
+    <button class="modal-close" onclick="closeModal('edit-user')">✕</button>
+    <h3>✏ Edit User — ${userName}</h3>
+    <div class="alert alert-info">Update the name and email address for this user. Email is required for notifications.</div>
+    <div class="form-group mt-8"><label>Full Name</label><input type="text" id="eu-name" value="${userName}"></div>
+    <div class="form-group mt-8"><label>Email Address</label><input type="email" id="eu-email" value="${userEmail}" placeholder="e.g. name@gmail.com"></div>
+    <div id="eu-msg" class="mt-8"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('edit-user')">Cancel</button>
+      <button class="btn btn-primary" onclick="saveEditUser('${userId}')">Save Changes</button>
+    </div>
+  `);
+}
+
+async function saveEditUser(userId) {
+  const name = document.getElementById('eu-name').value.trim();
+  const email = document.getElementById('eu-email').value.trim();
+  if (!name) { document.getElementById('eu-msg').innerHTML = '<div class="alert alert-error">Name is required</div>'; return; }
+  const { error } = await db.from('users').update({ name, email: email||null }).eq('id', userId);
+  if (error) { document.getElementById('eu-msg').innerHTML = `<div class="alert alert-error">${error.message}</div>`; return; }
+  document.getElementById('eu-msg').innerHTML = '<div class="alert alert-success">✓ User updated successfully</div>';
+  setTimeout(() => { closeModal('edit-user'); loadGlobalData().then(loadUsers); }, 1000);
 }
 
 function openChangePassword(userId, userName) {
