@@ -632,8 +632,16 @@ function pageDashboard() {
 }
 
 async function recalcAndRefresh() {
-  await recalculatePotBalances();
-  loadDashboard();
+  const btn = document.querySelector('[onclick="recalcAndRefresh()"]');
+  if (btn) { btn.textContent = '⟳ Syncing...'; btn.disabled = true; }
+  try {
+    await recalculatePotBalances();
+    await loadDashboard();
+    if (btn) { btn.textContent = '✓ Synced!'; setTimeout(() => { btn.textContent = '⟳ Sync Balances'; btn.disabled = false; }, 2000); }
+  } catch(e) {
+    console.error('Sync error:', e);
+    if (btn) { btn.textContent = '✗ Error — check console'; btn.disabled = false; }
+  }
 }
 
 async function loadDashboard() {
