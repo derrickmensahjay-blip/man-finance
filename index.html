@@ -5,6 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>MAN Finance System</title>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
+<style>
+  /* NOTIFICATION BELL */
+  .notif-bell { position: relative; cursor: pointer; padding: 6px 10px; color: rgba(255,255,255,0.7); font-size: 18px; }
+  .notif-bell:hover { color: white; }
+  .notif-badge { position: absolute; top: 2px; right: 4px; background: var(--red); color: white; border-radius: 50%; width: 16px; height: 16px; font-size: 10px; font-weight: 700; display: flex; align-items: center; justify-content: center; }
+  .notif-dropdown { position: absolute; right: 0; top: 100%; width: 320px; background: white; border-radius: 10px; box-shadow: 0 8px 30px rgba(0,0,0,0.15); z-index: 999; overflow: hidden; }
+  .notif-header { padding: 12px 16px; background: var(--green); color: white; font-size: 13px; font-weight: 700; }
+  .notif-item { padding: 12px 16px; border-bottom: 1px solid #f0f0f0; font-size: 12px; cursor: pointer; }
+  .notif-item:hover { background: #f9f9f9; }
+  .notif-item.unread { background: #f0f9f4; border-left: 3px solid var(--green); }
+  .notif-item .notif-title { font-weight: 600; color: var(--text); margin-bottom: 2px; }
+  .notif-item .notif-time { color: var(--muted); font-size: 11px; }
+  .notif-empty { padding: 20px; text-align: center; color: var(--muted); font-size: 13px; }
+</style>
 <style>
   :root {
     --gold: #b8860b;
@@ -247,6 +262,15 @@
     </div>
     <nav class="sidebar-nav" id="sidebar-nav"></nav>
     <div class="sidebar-footer">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div style="position:relative;" id="notif-container">
+          <div class="notif-bell" onclick="toggleNotifications()" title="Notifications">🔔<span class="notif-badge hidden" id="notif-count">0</span></div>
+          <div class="notif-dropdown hidden" id="notif-dropdown">
+            <div class="notif-header">🔔 Notifications</div>
+            <div id="notif-list"><div class="notif-empty">No notifications</div></div>
+          </div>
+        </div>
+      </div>
       <button class="btn-logout" onclick="doLogout()">⇠ Sign Out</button>
     </div>
   </div>
@@ -266,6 +290,71 @@ const SUPABASE_URL = 'https://fixtjkfghcexffdxiisz.supabase.co';
 const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZpeHRqa2ZnaGNleGZmZHhpaXN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0NDM0MDksImV4cCI6MjA5NjAxOTQwOX0.-WrENj-GixEqeBKMg7q8_sgAsriJgJS46wHy9EaNSV0';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+// EmailJS config
+const EMAILJS_SERVICE_ID = 'service_v2u82kl';
+const EMAILJS_TEMPLATE_ID = 'template_kgx2d7k';
+const EMAILJS_PUBLIC_KEY = 'dEAfdQpgI18EN9XSP';
+
+async function sendNotificationEmail(toEmail, toName, subject, message) {
+  if (!toEmail) return;
+  try {
+    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+      to_email: toEmail, to_name: toName, subject, message
+    }, EMAILJS_PUBLIC_KEY);
+  } catch(e) { console.warn('Email notification failed:', e); }
+}
+
+async function createNotification(userId, title, message, type) {
+  await db.from('notifications').insert({ user_id: userId, title, message, type, is_read: false });
+}
+
+async function notifyUser(userId, title, message, type, email, name) {
+  await createNotification(userId, title, message, type);
+  await sendNotificationEmail(email, name, title, message);
+}
+
+async function loadNotifications() {
+  if (!currentUser) return;
+  const { data } = await db.from('notifications').select('*').eq('user_id', currentUser.id).order('created_at', {ascending:false}).limit(20);
+  const unread = (data||[]).filter(n => !n.is_read);
+  const badge = document.getElementById('notif-count');
+  if (badge) { badge.textContent = unread.length; badge.classList.toggle('hidden', unread.length === 0); }
+  const list = document.getElementById('notif-list');
+  if (!list) return;
+  if (!data || !data.length) { list.innerHTML = '<div class="notif-empty">No notifications yet</div>'; return; }
+  list.innerHTML = data.map(n => `
+    <div class="notif-item ${n.is_read?'':'unread'}" onclick="markNotifRead('${n.id}')">
+      <div class="notif-title">${n.title}</div>
+      <div style="font-size:12px;color:#333;margin:2px 0;">${n.message}</div>
+      <div class="notif-time">${new Date(n.created_at).toLocaleString('en-GB')}</div>
+    </div>`).join('');
+}
+
+async function markNotifRead(id) {
+  await db.from('notifications').update({ is_read: true }).eq('id', id);
+  loadNotifications();
+}
+
+async function markAllNotifRead() {
+  await db.from('notifications').update({ is_read: true }).eq('user_id', currentUser.id);
+  loadNotifications();
+}
+
+function toggleNotifications() {
+  const dd = document.getElementById('notif-dropdown');
+  if (!dd) return;
+  dd.classList.toggle('hidden');
+  if (!dd.classList.contains('hidden')) { loadNotifications(); markAllNotifRead(); }
+}
+
+// Close notifications when clicking outside
+document.addEventListener('click', (e) => {
+  const container = document.getElementById('notif-container');
+  if (container && !container.contains(e.target)) {
+    document.getElementById('notif-dropdown')?.classList.add('hidden');
+  }
+});
 
 // =============================================
 // APP STATE
@@ -306,6 +395,7 @@ const NAV_CONFIG = [
     { id: 'requests', label: 'Fund Requests', icon: '⇌', roles: ['lead_pastor','finance_admin','department_head','womens_ministry_lead','youth_ministry_lead','children_ministry_lead'] }
   ]},
   { section: 'Reports', items: [
+    { id: 'budgets', label: 'Budget Reviews', icon: '📊', roles: ['lead_pastor','finance_admin'] },
     { id: 'reports', label: 'Reports & Export', icon: '▤', roles: ['lead_pastor','finance_admin'] },
     { id: 'audit', label: 'Audit Log', icon: '☰', roles: ['lead_pastor','finance_admin'] }
   ]},
@@ -349,12 +439,70 @@ async function initApp() {
   await loadGlobalData();
   buildSidebar();
   buildPages();
-  // Dept heads go straight to requests; ministry leads get dashboard
+  loadNotifications();
+  setInterval(loadNotifications, 60000); // refresh every minute
   if (currentUser.role === 'department_head') {
     navigateTo('requests');
   } else {
     navigateTo('dashboard');
   }
+}
+
+// Recalculate all pot balances from actual records (fixes drift)
+async function recalculatePotBalances() {
+  const [{ data: income }, { data: welfare_d }, { data: sw }, { data: transfers }, { data: requests }] = await Promise.all([
+    db.from('income_records').select('*'),
+    db.from('welfare_disbursements').select('amount'),
+    db.from('savings_withdrawals').select('amount'),
+    db.from('fund_transfers').select('from_fund,to_fund,amount'),
+    db.from('fund_requests').select('fund_source,amount_requested,amount_returned,status')
+  ]);
+
+  const pots = { tithe:0, savings:0, operational:0, womens_ministry:0, youth_ministry:0, children_ministry:0, welfare:0 };
+
+  // Add all income
+  (income||[]).forEach(r => {
+    pots.tithe += parseFloat(r.tithe_amount||0);
+    pots.savings += parseFloat(r.savings_amount||0);
+    pots.operational += parseFloat(r.operational_amount||0);
+    pots.womens_ministry += parseFloat(r.womens_ministry_amount||0);
+    pots.youth_ministry += parseFloat(r.youth_ministry_amount||0);
+    pots.children_ministry += parseFloat(r.children_ministry_amount||0);
+    pots.welfare += parseFloat(r.welfare_amount||0);
+  });
+
+  // Subtract welfare disbursements
+  (welfare_d||[]).forEach(d => { pots.welfare -= parseFloat(d.amount||0); });
+
+  // Subtract savings withdrawals
+  (sw||[]).forEach(w => { pots.savings -= parseFloat(w.amount||0); });
+
+  // Apply transfers
+  (transfers||[]).forEach(t => {
+    if (pots[t.from_fund] !== undefined) pots[t.from_fund] -= parseFloat(t.amount||0);
+    if (pots[t.to_fund] !== undefined) pots[t.to_fund] += parseFloat(t.amount||0);
+  });
+
+  // Subtract disbursed fund requests, add back returned amounts
+  (requests||[]).forEach(r => {
+    if (['disbursed','reconciled'].includes(r.status)) {
+      if (pots[r.fund_source] !== undefined) pots[r.fund_source] -= parseFloat(r.amount_requested||0);
+    }
+    if (r.status === 'reconciled' && r.amount_returned > 0) {
+      if (pots[r.fund_source] !== undefined) pots[r.fund_source] += parseFloat(r.amount_returned||0);
+    }
+  });
+
+  // Add pledge fulfillments to operational
+  const { data: pledgePayments } = await db.from('pledge_payments').select('amount');
+  (pledgePayments||[]).forEach(p => { pots.operational += parseFloat(p.amount||0); });
+
+  // Update all pots
+  await Promise.all(Object.entries(pots).map(([name, balance]) =>
+    db.from('fund_pots').update({ balance: Math.max(0, balance), updated_at: new Date().toISOString() }).eq('name', name)
+  ));
+
+  await loadGlobalData();
 }
 
 async function loadGlobalData() {
@@ -390,6 +538,7 @@ function buildPages() {
     <div class="page" id="page-welfare">${pageWelfare()}</div>
     <div class="page" id="page-savings">${pageSavings()}</div>
     <div class="page" id="page-requests">${pageRequests()}</div>
+    <div class="page" id="page-budgets">${pageBudgets()}</div>
     <div class="page" id="page-reports">${pageReports()}</div>
     <div class="page" id="page-audit">${pageAudit()}</div>
     <div class="page" id="page-users">${pageUsers()}</div>
@@ -415,6 +564,7 @@ async function loadPage(pageId) {
     case 'welfare': loadWelfare(); break;
     case 'savings': loadSavings(); break;
     case 'requests': loadRequests(); break;
+    case 'budgets': loadBudgets(); break;
     case 'reports': loadReports(); break;
     case 'audit': loadAudit(); break;
     case 'users': loadUsers(); break;
@@ -455,13 +605,23 @@ function pageDashboard() {
       </div>
     </div>
     <div class="card mt-16">
-      <div class="card-title">🕐 Recent Transactions</div>
+      <div class="card-title" style="display:flex;justify-content:space-between;align-items:center;">
+        🕐 Recent Transactions
+        <button class="btn btn-sm btn-secondary" onclick="recalcAndRefresh()" title="Recalculate all fund balances from actual records">⟳ Sync Balances</button>
+      </div>
       <div id="recent-transactions"></div>
     </div>
   `;
 }
 
+async function recalcAndRefresh() {
+  await recalculatePotBalances();
+  loadDashboard();
+}
+
 async function loadDashboard() {
+  // Auto recalculate on every dashboard load for accuracy
+  await recalculatePotBalances();
   // Ministry leads with own funds get mini dashboard
   if (MINISTRY_OFFERING_ROLES.includes(currentUser.role)) {
     loadMinistryDashboard();
@@ -1772,9 +1932,18 @@ async function loadRequests() {
 function getRequestActions(r) {
   const btns = [];
   btns.push(`<button class="btn btn-sm btn-secondary" onclick="viewRequest('${r.id}')">View</button>`);
-  if (r.status === 'pending' && ['lead_pastor','finance_admin'].includes(currentUser.role)) {
-    btns.push(`<button class="btn btn-sm btn-primary" onclick="reviewRequest('${r.id}','approve')">✓ Approve</button>`);
-    btns.push(`<button class="btn btn-sm btn-danger" onclick="reviewRequest('${r.id}','reject')">✗ Reject</button>`);
+  if (r.status === 'pending') {
+    if (['lead_pastor','finance_admin'].includes(currentUser.role)) {
+      btns.push(`<button class="btn btn-sm btn-primary" onclick="reviewRequest('${r.id}','approve')">✓ Approve</button>`);
+      btns.push(`<button class="btn btn-sm btn-danger" onclick="reviewRequest('${r.id}','reject')">✗ Reject</button>`);
+    }
+    // Requester can delete their own pending request
+    if (r.requested_by === currentUser.id || ['lead_pastor','finance_admin'].includes(currentUser.role)) {
+      btns.push(`<button class="btn btn-sm btn-danger" onclick="deleteFundRequest('${r.id}')">🗑 Delete</button>`);
+    }
+  }
+  if (r.status === 'rejected' && r.requested_by === currentUser.id) {
+    btns.push(`<button class="btn btn-sm btn-gold" onclick="editAndResubmit('${r.id}')">✏ Edit & Resubmit</button>`);
   }
   if (r.status === 'approved' && ['lead_pastor','finance_admin'].includes(currentUser.role)) {
     btns.push(`<button class="btn btn-sm btn-gold" onclick="disburseRequest('${r.id}',${r.amount_requested},'${r.fund_source}')">💸 Disburse</button>`);
@@ -1809,6 +1978,17 @@ function openNewRequest() {
       <div class="form-group"><label>Purpose (brief title)</label><input type="text" id="rq-purpose" placeholder="e.g. Sound equipment purchase"></div>
       <div class="form-group full"><label>Full Description</label><textarea id="rq-desc" placeholder="Describe what the funds will be used for in detail..."></textarea></div>
     </div>
+    <hr class="divider">
+    <div style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:12px;">💳 Payment Account Details</div>
+    <div class="form-grid">
+      <div class="form-group"><label>Payment Method</label><select id="rq-pay-method">
+        <option value="mobile_money">Mobile Money</option>
+        <option value="bank">Bank Account</option>
+        <option value="cash">Cash</option>
+      </select></div>
+      <div class="form-group"><label>Account Name</label><input type="text" id="rq-pay-name" placeholder="Name on account"></div>
+      <div class="form-group full"><label>Account / MoMo Number</label><input type="text" id="rq-pay-number" placeholder="Account or mobile money number"></div>
+    </div>
     <div id="rq-msg"></div>
     <div class="modal-footer">
       <button class="btn btn-secondary" onclick="closeModal('new-request')">Cancel</button>
@@ -1823,11 +2003,24 @@ async function saveRequest() {
   const amount = parseFloat(document.getElementById('rq-amount').value||0);
   const purpose = document.getElementById('rq-purpose').value.trim();
   const desc = document.getElementById('rq-desc').value.trim();
+  const payMethod = document.getElementById('rq-pay-method').value;
+  const payName = document.getElementById('rq-pay-name').value.trim();
+  const payNumber = document.getElementById('rq-pay-number').value.trim();
   if (!dept || amount <= 0 || !purpose) { document.getElementById('rq-msg').innerHTML = '<div class="alert alert-error">Department, amount and purpose required</div>'; return; }
   const reqNum = 'REQ-' + new Date().getFullYear() + '-' + uid();
-  const { error } = await db.from('fund_requests').insert({ request_number: reqNum, department: dept, requested_by: currentUser.id, fund_source: fund, amount_requested: amount, purpose, description: desc });
+  const { error } = await db.from('fund_requests').insert({
+    request_number: reqNum, department: dept, requested_by: currentUser.id,
+    fund_source: fund, amount_requested: amount, purpose, description: desc,
+    payment_method: payMethod, payment_account_name: payName, payment_account_number: payNumber
+  });
   if (error) { document.getElementById('rq-msg').innerHTML = `<div class="alert alert-error">${error.message}</div>`; return; }
   await logAudit('FUND_REQUEST_SUBMITTED', 'fund_requests', null, { dept, amount, purpose });
+
+  // Notify finance admins and lead pastor
+  const { data: admins } = await db.from('users').select('id,name,email').in('role',['finance_admin','lead_pastor']).eq('is_active',true);
+  for (const admin of admins||[]) {
+    await notifyUser(admin.id, 'New Fund Request', `${currentUser.name} (${dept}) submitted a fund request for ${fmt(amount)} — "${purpose}"`, 'fund_request', admin.email, admin.name);
+  }
   closeModal('new-request');
   loadRequests();
 }
@@ -1845,12 +2038,90 @@ function reviewRequest(reqId, action) {
   `);
 }
 
+async function deleteFundRequest(id) {
+  if (!confirm('Delete this fund request? This cannot be undone.')) return;
+  await db.from('fund_requests').delete().eq('id', id);
+  await logAudit('FUND_REQUEST_DELETED','fund_requests',id,{});
+  loadRequests();
+}
+
+function editAndResubmit(reqId) {
+  openModal('edit-resubmit', `
+    <button class="modal-close" onclick="closeModal('edit-resubmit')">✕</button>
+    <h3>✏ Edit & Resubmit Request</h3>
+    <div class="alert alert-warning">This request was rejected. Edit the details below and resubmit for review.</div>
+    <div id="edit-resubmit-form"><div class="loading">Loading...</div></div>
+  `);
+  loadEditResubmitForm(reqId);
+}
+
+async function loadEditResubmitForm(reqId) {
+  const { data: r } = await db.from('fund_requests').select('*').eq('id',reqId).single();
+  if (!r) return;
+  document.getElementById('edit-resubmit-form').innerHTML = `
+    <div class="alert alert-error" style="margin-bottom:12px;"><strong>Rejection reason:</strong> ${r.review_notes||'No reason given'}</div>
+    <div class="form-grid">
+      <div class="form-group"><label>Amount (GH₵)</label><input type="number" id="er-amount" value="${r.amount_requested}" min="0" step="0.01"></div>
+      <div class="form-group"><label>Purpose</label><input type="text" id="er-purpose" value="${r.purpose}"></div>
+      <div class="form-group full"><label>Description</label><textarea id="er-desc">${r.description||''}</textarea></div>
+    </div>
+    <hr class="divider">
+    <div style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:12px;">💳 Payment Account Details</div>
+    <div class="form-grid">
+      <div class="form-group"><label>Payment Method</label><select id="er-pay-method">
+        <option value="mobile_money" ${r.payment_method==='mobile_money'?'selected':''}>Mobile Money</option>
+        <option value="bank" ${r.payment_method==='bank'?'selected':''}>Bank Account</option>
+        <option value="cash" ${r.payment_method==='cash'?'selected':''}>Cash</option>
+      </select></div>
+      <div class="form-group"><label>Account Name</label><input type="text" id="er-pay-name" value="${r.payment_account_name||''}"></div>
+      <div class="form-group full"><label>Account / MoMo Number</label><input type="text" id="er-pay-number" value="${r.payment_account_number||''}"></div>
+    </div>
+    <div id="er-msg"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('edit-resubmit')">Cancel</button>
+      <button class="btn btn-primary" onclick="submitResubmit('${reqId}')">Resubmit Request</button>
+    </div>
+  `;
+}
+
+async function submitResubmit(reqId) {
+  const amount = parseFloat(document.getElementById('er-amount').value||0);
+  const purpose = document.getElementById('er-purpose').value.trim();
+  const desc = document.getElementById('er-desc').value.trim();
+  const payMethod = document.getElementById('er-pay-method').value;
+  const payName = document.getElementById('er-pay-name').value.trim();
+  const payNumber = document.getElementById('er-pay-number').value.trim();
+  if (amount <= 0 || !purpose) { document.getElementById('er-msg').innerHTML = '<div class="alert alert-error">Amount and purpose required</div>'; return; }
+  await db.from('fund_requests').update({
+    status: 'pending', amount_requested: amount, purpose, description: desc,
+    payment_method: payMethod, payment_account_name: payName, payment_account_number: payNumber,
+    reviewed_by: null, review_notes: null, reviewed_at: null
+  }).eq('id', reqId);
+  await logAudit('FUND_REQUEST_RESUBMITTED','fund_requests',reqId,{amount,purpose});
+  // Notify admins
+  const { data: admins } = await db.from('users').select('id,name,email').in('role',['finance_admin','lead_pastor']).eq('is_active',true);
+  for (const admin of admins||[]) {
+    await notifyUser(admin.id,'Fund Request Resubmitted',`${currentUser.name} has edited and resubmitted a fund request for ${fmt(amount)} — "${purpose}"`, 'fund_request', admin.email, admin.name);
+  }
+  closeModal('edit-resubmit');
+  loadRequests();
+}
+
 async function submitReview(reqId, action) {
   const notes = document.getElementById('rev-notes').value;
   const status = action === 'approve' ? 'approved' : 'rejected';
+  const { data: req } = await db.from('fund_requests').select('*, requested_by_user:users!fund_requests_requested_by_fkey(id,name,email)').eq('id',reqId).single();
   const { error } = await db.from('fund_requests').update({ status, reviewed_by: currentUser.id, review_notes: notes, reviewed_at: new Date().toISOString() }).eq('id', reqId);
   if (error) { document.getElementById('rev-msg').innerHTML = `<div class="alert alert-error">${error.message}</div>`; return; }
   await logAudit('FUND_REQUEST_'+status.toUpperCase(), 'fund_requests', reqId, { notes });
+  // Notify requester
+  if (req?.requested_by_user) {
+    const u = req.requested_by_user;
+    const msg = action === 'approve'
+      ? `Your fund request "${req.purpose}" for ${fmt(req.amount_requested)} has been APPROVED. Funds will be disbursed shortly.`
+      : `Your fund request "${req.purpose}" for ${fmt(req.amount_requested)} has been REJECTED. Reason: ${notes||'No reason given'}. You can edit and resubmit from the Fund Requests page.`;
+    await notifyUser(u.id, `Fund Request ${action==='approve'?'Approved':'Rejected'}`, msg, 'fund_request', u.email, u.name);
+  }
   closeModal('review-req');
   loadRequests();
 }
@@ -1861,23 +2132,37 @@ async function disburseRequest(reqId, amount, fundSource) {
     openModal('disburse-err', `
       <button class="modal-close" onclick="closeModal('disburse-err')">✕</button>
       <h3>⚠ Insufficient Funds</h3>
-      <div class="alert alert-error">The ${fundSource.replace('_',' ')} fund has ${fmt(balance)} but this request requires ${fmt(amount)}.</div>
+      <div class="alert alert-error">The ${fundSource.replace(/_/g,' ')} fund has ${fmt(balance)} but this request requires ${fmt(amount)}.</div>
       <div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('disburse-err')">Close</button></div>
     `); return;
   }
-  if (!confirm(`Disburse ${fmt(amount)} from ${fundSource.replace('_',' ')} fund?`)) return;
+  if (!confirm(`Disburse ${fmt(amount)} from ${fundSource.replace(/_/g,' ')} fund?`)) return;
+  const { data: req } = await db.from('fund_requests').select('*, requested_by_user:users!fund_requests_requested_by_fkey(id,name,email)').eq('id',reqId).single();
   await db.from('fund_requests').update({ status: 'disbursed', disbursed_at: new Date().toISOString(), disbursed_by: currentUser.id }).eq('id', reqId);
   await decrementPot(fundSource, amount);
   await logAudit('FUND_DISBURSED', 'fund_requests', reqId, { amount, fundSource });
+  if (req?.requested_by_user) {
+    const u = req.requested_by_user;
+    await notifyUser(u.id,'Funds Disbursed',`Your fund request "${req.purpose}" — ${fmt(amount)} has been disbursed. Please reconcile after use.`,'disbursement', u.email, u.name);
+  }
   await loadGlobalData();
   loadRequests();
 }
 
 function reconcileRequest(reqId, disbursedAmount) {
+  const churchMomo = appData.settings.church_momo || 'Not configured yet';
+  const churchBank = appData.settings.church_bank || 'Not configured yet';
+  const churchAccountName = appData.settings.church_account_name || 'Mighty Army Network';
   openModal('reconcile-req', `
     <button class="modal-close" onclick="closeModal('reconcile-req')">✕</button>
     <h3>📋 Reconcile Fund Request</h3>
     <div class="alert alert-info">Please provide the actual amount spent and return any unspent funds.</div>
+    <div style="background:var(--green-light);border:1px solid #a8d5b5;border-radius:8px;padding:14px;margin-bottom:16px;">
+      <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:8px;">🏦 Return Unspent Funds To — Church Account Details:</div>
+      <div style="font-size:13px;"><strong>Account Name:</strong> ${churchAccountName}</div>
+      <div style="font-size:13px;margin-top:4px;"><strong>Mobile Money:</strong> ${churchMomo}</div>
+      <div style="font-size:13px;margin-top:4px;"><strong>Bank Account:</strong> ${churchBank}</div>
+    </div>
     <div class="form-grid">
       <div class="form-group"><label>Amount Disbursed</label><input type="number" value="${disbursedAmount}" disabled style="background:#f5f5f5;"></div>
       <div class="form-group"><label>Actual Amount Spent (GH₵)</label><input type="number" id="rec-spent" placeholder="0.00" min="0" max="${disbursedAmount}" step="0.01" oninput="calcReturn(${disbursedAmount})"></div>
@@ -1948,6 +2233,106 @@ async function viewRequest(reqId) {
     </div>` : ''}
     <div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('view-req')">Close</button></div>
   `);
+}
+
+// =============================================
+// BUDGET REVIEW PAGE
+// =============================================
+function pageBudgets() {
+  return `
+    <div class="page-header"><h2>📊 Budget Reviews</h2><p>Review and approve quarterly budget estimates from departments</p></div>
+    <div class="tabs">
+      <button class="tab active" onclick="switchBudgetTab('pending')">Pending</button>
+      <button class="tab" onclick="switchBudgetTab('approved')">Approved</button>
+      <button class="tab" onclick="switchBudgetTab('rejected')">Rejected</button>
+      <button class="tab" onclick="switchBudgetTab('all')">All</button>
+    </div>
+    <div id="budgets-table"></div>
+  `;
+}
+
+let currentBudgetTab = 'pending';
+function switchBudgetTab(tab) {
+  currentBudgetTab = tab;
+  document.querySelectorAll('#page-budgets .tab').forEach((t,i) => {
+    t.classList.toggle('active', ['pending','approved','rejected','all'][i] === tab);
+  });
+  loadBudgets();
+}
+
+async function loadBudgets() {
+  let query = db.from('dept_budgets').select('*, submitted_by_user:users!dept_budgets_submitted_by_fkey(name,department)').order('year',{ascending:false}).order('quarter',{ascending:false});
+  if (currentBudgetTab !== 'all') query = query.eq('status', currentBudgetTab);
+  const { data } = await query;
+  const el = document.getElementById('budgets-table');
+  if (!el) return;
+  if (!data || !data.length) { el.innerHTML = '<div class="empty-state"><div class="icon">📊</div><p>No budget submissions in this category</p></div>'; return; }
+  el.innerHTML = `<div class="table-wrap"><table>
+    <thead><tr><th>Department</th><th>Quarter</th><th>Year</th><th>Amount</th><th>Submitted By</th><th>Status</th><th>Date</th><th>Actions</th></tr></thead>
+    <tbody>${data.map(b=>`<tr>
+      <td><strong>${b.department}</strong></td>
+      <td><span style="background:#e8f5e9;padding:2px 10px;border-radius:10px;font-size:12px;font-weight:700;">${b.quarter}</span></td>
+      <td>${b.year}</td>
+      <td class="font-bold">${fmt(b.total_amount)}</td>
+      <td>${b.submitted_by_user?.name||'—'}</td>
+      <td><span class="badge badge-${b.status}">${b.status}</span></td>
+      <td>${fmtDate(b.created_at)}</td>
+      <td style="white-space:nowrap;">
+        <button class="btn btn-sm btn-secondary" onclick="viewBudget('${b.id}')">View</button>
+        ${b.status==='pending' ? `
+        <button class="btn btn-sm btn-primary" onclick="reviewBudget('${b.id}','approved')">✓ Approve</button>
+        <button class="btn btn-sm btn-danger" onclick="reviewBudget('${b.id}','rejected')">✗ Reject</button>` : ''}
+      </td>
+    </tr>`).join('')}</tbody>
+  </table></div>`;
+}
+
+async function viewBudget(id) {
+  const { data: b } = await db.from('dept_budgets').select('*, submitted_by_user:users!dept_budgets_submitted_by_fkey(name), reviewed_by_user:users!dept_budgets_reviewed_by_fkey(name)').eq('id',id).single();
+  if (!b) return;
+  openModal('view-budget', `
+    <button class="modal-close" onclick="closeModal('view-budget')">✕</button>
+    <h3>Budget Estimate — ${b.department} ${b.quarter} ${b.year}</h3>
+    <div class="calc-preview">
+      <div class="calc-row"><span>Department</span><span>${b.department}</span></div>
+      <div class="calc-row"><span>Quarter / Year</span><span>${b.quarter} ${b.year}</span></div>
+      <div class="calc-row"><span>Total Estimate</span><span class="font-bold">${fmt(b.total_amount)}</span></div>
+      <div class="calc-row"><span>Status</span><span><span class="badge badge-${b.status}">${b.status}</span></span></div>
+      <div class="calc-row"><span>Submitted By</span><span>${b.submitted_by_user?.name||'—'}</span></div>
+      ${b.reviewed_by_user ? `<div class="calc-row"><span>Reviewed By</span><span>${b.reviewed_by_user.name}</span></div>` : ''}
+      ${b.review_notes ? `<div class="calc-row"><span>Review Notes</span><span>${b.review_notes}</span></div>` : ''}
+    </div>
+    ${b.notes ? `<div style="margin-top:12px;"><strong>Budget Breakdown:</strong><p style="margin-top:6px;font-size:13px;white-space:pre-wrap;">${b.notes}</p></div>` : ''}
+    <div class="modal-footer"><button class="btn btn-secondary" onclick="closeModal('view-budget')">Close</button></div>
+  `);
+}
+
+function reviewBudget(id, action) {
+  openModal('review-budget', `
+    <button class="modal-close" onclick="closeModal('review-budget')">✕</button>
+    <h3>${action==='approved'?'✓ Approve':'✗ Reject'} Budget</h3>
+    <div class="form-group"><label>Notes / Reason</label><textarea id="rb-notes" placeholder="${action==='rejected'?'Reason for rejection...':'Optional approval notes...'}"></textarea></div>
+    <div id="rb-msg"></div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" onclick="closeModal('review-budget')">Cancel</button>
+      <button class="btn ${action==='approved'?'btn-primary':'btn-danger'}" onclick="submitBudgetReview('${id}','${action}')">Confirm</button>
+    </div>
+  `);
+}
+
+async function submitBudgetReview(id, action) {
+  const notes = document.getElementById('rb-notes').value;
+  const { data: b } = await db.from('dept_budgets').select('*, submitted_by_user:users!dept_budgets_submitted_by_fkey(id,name,email,department)').eq('id',id).single();
+  await db.from('dept_budgets').update({ status: action, reviewed_by: currentUser.id, review_notes: notes, reviewed_at: new Date().toISOString() }).eq('id', id);
+  if (b?.submitted_by_user) {
+    const u = b.submitted_by_user;
+    const msg = action === 'approved'
+      ? `Your ${b.quarter} ${b.year} budget estimate of ${fmt(b.total_amount)} for ${b.department} has been APPROVED.`
+      : `Your ${b.quarter} ${b.year} budget estimate for ${b.department} has been REJECTED. Reason: ${notes||'No reason given'}`;
+    await notifyUser(u.id, `Budget ${action==='approved'?'Approved':'Rejected'}`, msg, 'budget', u.email, u.name);
+  }
+  closeModal('review-budget');
+  loadBudgets();
 }
 
 // =============================================
@@ -2224,6 +2609,13 @@ function pageSettings() {
         </select></div>
         <div class="form-group"><label>Church Name</label><input type="text" id="s-church" placeholder="Church name"></div>
       </div>
+      <hr class="divider">
+      <div style="font-size:13px;font-weight:700;color:var(--green);margin-bottom:12px;">🏦 Church Account Details (shown during reconciliation)</div>
+      <div class="form-grid">
+        <div class="form-group"><label>Account Name</label><input type="text" id="s-account-name" placeholder="e.g. Mighty Army Network"></div>
+        <div class="form-group"><label>Mobile Money Number</label><input type="text" id="s-momo" placeholder="e.g. 024XXXXXXX"></div>
+        <div class="form-group full"><label>Bank Account Number & Bank Name</label><input type="text" id="s-bank" placeholder="e.g. 1234567890 — GCB Bank"></div>
+      </div>
       <div class="alert alert-info mt-16">Note: Savings + Operational rates must add up to 100%. Changing rates only affects future recordings.</div>
       <div class="btn-group mt-16">
         <button class="btn btn-primary" onclick="saveSettings()">Save Settings</button>
@@ -2242,6 +2634,9 @@ async function loadSettings() {
   setVal('s-op', s.operational_rate);
   setVal('s-welfare', s.welfare_frequency);
   setVal('s-church', s.church_name);
+  setVal('s-account-name', s.church_account_name);
+  setVal('s-momo', s.church_momo);
+  setVal('s-bank', s.church_bank);
   document.getElementById('s-savings')?.addEventListener('input', function() {
     const op = document.getElementById('s-op');
     if(op) op.value = Math.max(0, 100 - parseFloat(this.value||0));
@@ -2267,13 +2662,19 @@ async function saveSettings() {
   const op = 100 - parseFloat(savings||60);
   const welfare = document.getElementById('s-welfare').value;
   const church = document.getElementById('s-church').value.trim();
+  const accountName = document.getElementById('s-account-name').value.trim();
+  const momo = document.getElementById('s-momo').value.trim();
+  const bank = document.getElementById('s-bank').value.trim();
   const msg = document.getElementById('settings-msg');
   const updates = [
     { key:'tithe_rate', value: tithe },
     { key:'savings_rate', value: savings },
     { key:'operational_rate', value: op.toString() },
     { key:'welfare_frequency', value: welfare },
-    { key:'church_name', value: church }
+    { key:'church_name', value: church },
+    { key:'church_account_name', value: accountName },
+    { key:'church_momo', value: momo },
+    { key:'church_bank', value: bank }
   ];
   for (const u of updates) {
     await db.from('settings').upsert({ key: u.key, value: u.value, updated_at: new Date().toISOString() });
