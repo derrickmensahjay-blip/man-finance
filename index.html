@@ -303,7 +303,7 @@ const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 // Email via Netlify Function (keeps API key secure)
-const NETLIFY_EMAIL_URL = 'https://luxury-sunflower-257c6d.netlify.app/.netlify/functions/send-email';
+const NETLIFY_EMAIL_URL = 'https://luxury-sunflower-257c6d.netlify.app/send-email';
 
 async function sendNotificationEmail(toEmail, toName, subject, message) {
   if (!toEmail) return;
