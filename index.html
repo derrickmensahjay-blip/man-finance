@@ -302,32 +302,16 @@ const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZ
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
-// Email via Netlify Function (keeps API key secure)
-const NETLIFY_EMAIL_URL = 'https://luxury-sunflower-257c6d.netlify.app/send-email';
+// Email notifications disabled — using in-app notifications only
+const NETLIFY_EMAIL_URL = '';
 
 async function sendNotificationEmail(toEmail, toName, subject, message) {
-  if (!toEmail) return;
-  try {
-    const response = await fetch(NETLIFY_EMAIL_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ to_email: toEmail, to_name: toName, subject, message })
-    });
-    const result = await response.json();
-    if (result.success) {
-      console.log('Email sent to', toEmail);
-    } else {
-      console.warn('Email failed:', result.error);
-    }
-  } catch(e) {
-    console.warn('Email error:', e);
-  }
+  // Email disabled — notifications handled in-app via notification bell
+  return;
 }
 
 async function sendEmailToMany(recipients, subject, message) {
-  for (const r of recipients) {
-    if (r.email) await sendNotificationEmail(r.email, r.name, subject, message);
-  }
+  return;
 }
 
 async function createNotification(userId, title, message, type) {
