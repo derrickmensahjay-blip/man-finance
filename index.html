@@ -297,8 +297,8 @@
 // =============================================
 // SUPABASE CONFIG — Replace with your credentials
 // =============================================
-const SUPABASE_URL = 'https://fixtjkfghcexffdxiisz.supabase.co';
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZpeHRqa2ZnaGNleGZmZHhpaXN6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA0NDM0MDksImV4cCI6MjA5NjAxOTQwOX0.-WrENj-GixEqeBKMg7q8_sgAsriJgJS46wHy9EaNSV0';
+const SUPABASE_URL = 'YOUR_SUPABASE_URL';
+const SUPABASE_KEY = 'YOUR_SUPABASE_ANON_KEY';
 const { createClient } = supabase;
 const db = createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -327,8 +327,21 @@ async function loadNotifications() {
   if (!currentUser) return;
   const { data } = await db.from('notifications').select('*').eq('user_id', currentUser.id).order('created_at', {ascending:false}).limit(20);
   const unread = (data||[]).filter(n => !n.is_read);
+  const count = unread.length;
+
+  // Update in-app bell badge
   const badge = document.getElementById('notif-count');
-  if (badge) { badge.textContent = unread.length; badge.classList.toggle('hidden', unread.length === 0); }
+  if (badge) { badge.textContent = count; badge.classList.toggle('hidden', count === 0); }
+
+  // Update PWA app icon badge
+  if ('setAppBadge' in navigator) {
+    if (count > 0) {
+      navigator.setAppBadge(count).catch(() => {});
+    } else {
+      navigator.clearAppBadge().catch(() => {});
+    }
+  }
+
   const list = document.getElementById('notif-list');
   if (!list) return;
   if (!data || !data.length) { list.innerHTML = '<div class="notif-empty">No notifications yet</div>'; return; }
@@ -2170,23 +2183,23 @@ async function disburseRequest(reqId, amount, fundSource) {
 }
 
 function reconcileRequest(reqId, disbursedAmount) {
-  const churchMomo = appData.settings.church_momo || 'Not configured yet';
-  const churchBank = appData.settings.church_bank || 'Not configured yet';
+  const churchMomo = appData.settings.church_momo || 'Not configured — set in System Settings';
+  const churchBank = appData.settings.church_bank || 'Not configured — set in System Settings';
   const churchAccountName = appData.settings.church_account_name || 'Mighty Army Network';
   openModal('reconcile-req', `
     <button class="modal-close" onclick="closeModal('reconcile-req')">✕</button>
     <h3>📋 Reconcile Fund Request</h3>
-    <div class="alert alert-info">Please provide the actual amount spent and return any unspent funds.</div>
-    <div style="background:var(--green-light);border:1px solid #a8d5b5;border-radius:8px;padding:14px;margin-bottom:16px;">
-      <div style="font-size:12px;font-weight:700;color:var(--green);margin-bottom:8px;">🏦 Return Unspent Funds To — Church Account Details:</div>
-      <div style="font-size:13px;"><strong>Account Name:</strong> ${churchAccountName}</div>
-      <div style="font-size:13px;margin-top:4px;"><strong>Mobile Money:</strong> ${churchMomo}</div>
-      <div style="font-size:13px;margin-top:4px;"><strong>Bank Account:</strong> ${churchBank}</div>
+    <div class="alert alert-info">Enter the actual amount spent. If you did not spend all the money, return the balance to the church account below.</div>
+    <div style="background:#fff8e1;border:2px solid #f9c74f;border-radius:8px;padding:16px;margin-bottom:16px;">
+      <div style="font-size:13px;font-weight:700;color:#856404;margin-bottom:10px;">🏦 RETURN UNSPENT FUNDS TO CHURCH — Send to:</div>
+      <div style="font-size:15px;font-weight:700;color:#1a1a1a;">${churchAccountName}</div>
+      <div style="font-size:14px;margin-top:8px;">📱 <strong>Mobile Money:</strong> <span style="color:#1a5c2e;font-weight:700;font-size:16px;">${churchMomo}</span></div>
+      <div style="font-size:13px;margin-top:6px;">🏛 <strong>Bank Account:</strong> ${churchBank}</div>
     </div>
     <div class="form-grid">
-      <div class="form-group"><label>Amount Disbursed</label><input type="number" value="${disbursedAmount}" disabled style="background:#f5f5f5;"></div>
+      <div class="form-group"><label>Amount Disbursed (GH₵)</label><input type="number" value="${disbursedAmount}" disabled style="background:#f5f5f5;"></div>
       <div class="form-group"><label>Actual Amount Spent (GH₵)</label><input type="number" id="rec-spent" placeholder="0.00" min="0" max="${disbursedAmount}" step="0.01" oninput="calcReturn(${disbursedAmount})"></div>
-      <div class="form-group full"><label>Amount Returned (GH₵) — auto calculated</label><input type="number" id="rec-returned" readonly style="background:#f5f5f5;"></div>
+      <div class="form-group full"><label>Amount to Return (GH₵) — auto calculated</label><input type="number" id="rec-returned" readonly style="background:#f5f5f5;font-weight:700;color:#c0392b;"></div>
       <div class="form-group full"><label>Receipt Description / Reference</label><input type="text" id="rec-receipt" placeholder="Receipt number, vendor name, or description..."></div>
       <div class="form-group full"><label>Reconciliation Notes</label><textarea id="rec-notes" placeholder="Details of what was purchased/done..."></textarea></div>
     </div>
@@ -2244,6 +2257,13 @@ async function viewRequest(reqId) {
       <div class="calc-row"><span>Status</span><span><span class="badge badge-${r.status}">${r.status}</span></span></div>
     </div>
     ${r.description ? `<div style="margin:12px 0;"><strong>Description:</strong><p style="margin-top:6px;font-size:13px;color:var(--muted)">${r.description}</p></div>` : ''}
+    ${(r.payment_method || r.payment_account_name || r.payment_account_number) ? `
+    <div style="background:#fff8e1;border:1px solid #f9c74f;border-radius:8px;padding:14px;margin:12px 0;">
+      <div style="font-size:12px;font-weight:700;color:#856404;margin-bottom:10px;">💳 PAYMENT DETAILS — Send funds to:</div>
+      <div style="font-size:14px;"><strong>Method:</strong> ${(r.payment_method||'').replace('_',' ').replace(/\b\w/g,c=>c.toUpperCase())}</div>
+      <div style="font-size:14px;margin-top:6px;"><strong>Account Name:</strong> ${r.payment_account_name||'—'}</div>
+      <div style="font-size:16px;font-weight:700;color:#1a5c2e;margin-top:6px;"><strong>Number:</strong> ${r.payment_account_number||'—'}</div>
+    </div>` : '<div class="alert alert-warning" style="margin:12px 0;">⚠ No payment details provided by requester</div>'}
     ${r.reviewed_by ? `<div style="margin:10px 0;padding:10px;background:#f5f5f5;border-radius:8px;font-size:13px;"><strong>Review:</strong> ${r.review_notes||'Approved'} <span class="text-muted">— ${r.reviewed_by_user?.name||''}</span></div>` : ''}
     ${r.status==='reconciled' ? `<div style="margin:10px 0;padding:10px;background:var(--green-light);border-radius:8px;font-size:13px;">
       <strong>Reconciliation:</strong><br>
